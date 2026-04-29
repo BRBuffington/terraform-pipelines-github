@@ -1,0 +1,240 @@
+# Reusable Terraform CD workflow: matrix plan + gated apply.
+# Consumers call this with `uses: <owner>/terraform-pipelines-github/.github/workflows/terraform-cd.yml@<ref>`.
+#
+# Caller must have a GitHub Environment matching `inputs.environment` with these vars:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   TF_BACKEND_RESOURCE_GROUP, TF_BACKEND_STORAGE_ACCOUNT, TF_BACKEND_CONTAINER, TF_BACKEND_KEY_PREFIX
+# The caller-side `<environment>-apply` Environment should have required reviewers configured.
+name: terraform-cd (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      configs:
+        description: "JSON array of tfvars basenames in <working_dir>/environments/"
+        type: string
+        required: true
+      plan_only:
+        type: boolean
+        default: true
+      destroy:
+        type: boolean
+        default: false
+      working_dir:
+        type: string
+        default: "."
+      tfvars_dir:
+        type: string
+        default: "environments"
+      terraform_version:
+        type: string
+        default: ""
+      max_parallel_plan:
+        type: number
+        default: 4
+      apply_timeout_minutes:
+        type: number
+        default: 60
+      run_checkov:
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    name: plan-${{ matrix.config }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel_plan) }}
+      matrix:
+        config: ${{ fromJSON(inputs.configs) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORKING_DIR: ${{ inputs.working_dir }}
+      TFVARS_DIR: ${{ inputs.tfvars_dir }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tfvars file exists
+        run: |
+          f="${WORKING_DIR}/${TFVARS_DIR}/${{ matrix.config }}.tfvars"
+          if [[ ! -f "$f" ]]; then echo "::error::$f not found"; exit 1; fi
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve Terraform version
+        id: tfver
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          if [[ -n "${{ inputs.terraform_version }}" ]]; then
+            echo "version=${{ inputs.terraform_version }}" >> "$GITHUB_OUTPUT"
+          elif [[ -f .terraform-version ]]; then
+            echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.9.5" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: terraform fmt -check
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: terraform init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: terraform workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform workspace select -or-create "${{ matrix.config }}"
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          set +e
+          DESTROY=""
+          if [[ "${{ inputs.destroy }}" == "true" ]]; then DESTROY="-destroy"; fi
+          terraform plan -input=false -lock-timeout=10m -detailed-exitcode -no-color \
+            -var-file="${TFVARS_DIR}/${{ matrix.config }}.tfvars" \
+            -out="${{ matrix.config }}.tfplan" \
+            $DESTROY | tee plan.txt
+          ec=${PIPESTATUS[0]}
+          set -e
+          case $ec in
+            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::plan failed (exit $ec)"; exit $ec ;;
+          esac
+
+      - name: terraform show -json
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform show -json "${{ matrix.config }}.tfplan" > "${{ matrix.config }}.tfplan.json"
+
+      - name: checkov on plan
+        if: ${{ inputs.run_checkov && !inputs.destroy }}
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          file: ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.json
+          framework: terraform_plan
+          quiet: true
+          soft_fail: true
+        continue-on-error: true
+
+      - name: upload plan artifact
+        if: ${{ !inputs.plan_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.config }}
+          path: |
+            ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan
+            ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.json
+          retention-days: 7
+
+  apply:
+    name: apply-${{ matrix.config }}
+    needs: plan
+    if: ${{ !inputs.plan_only && needs.plan.outputs.has_changes == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}-apply
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        config: ${{ fromJSON(inputs.configs) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORKING_DIR: ${{ inputs.working_dir }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve Terraform version
+        id: tfver
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          if [[ -n "${{ inputs.terraform_version }}" ]]; then
+            echo "version=${{ inputs.terraform_version }}" >> "$GITHUB_OUTPUT"
+          elif [[ -f .terraform-version ]]; then
+            echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.9.5" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ matrix.config }}
+          path: ${{ env.WORKING_DIR }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: terraform workspace
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform workspace select "${{ matrix.config }}"
+
+      - name: terraform apply
+        working-directory: ${{ env.WORKING_DIR }}
+        timeout-minutes: ${{ fromJSON(inputs.apply_timeout_minutes) }}
+        run: terraform apply -input=false -no-color -auto-approve "${{ matrix.config }}.tfplan"
+
+      - name: terraform output
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform output -no-color || true

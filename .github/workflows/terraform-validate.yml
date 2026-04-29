@@ -1,0 +1,85 @@
+# Reusable Terraform CI workflow.
+# Consumers call this with `uses: <owner>/terraform-pipelines-github/.github/workflows/terraform-validate.yml@<ref>`.
+name: terraform-validate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working_dir:
+        type: string
+        default: "."
+      terraform_version:
+        type: string
+        default: ""    # empty -> read .terraform-version, fallback 1.9.5
+      run_tflint:
+        type: boolean
+        default: true
+      run_checkov:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORKING_DIR: ${{ inputs.working_dir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Terraform version
+        id: tfver
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          if [[ -n "${{ inputs.terraform_version }}" ]]; then
+            echo "version=${{ inputs.terraform_version }}" >> "$GITHUB_OUTPUT"
+          elif [[ -f .terraform-version ]]; then
+            echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.9.5" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: terraform fmt -check
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (no backend)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate -no-color
+
+      - name: setup tflint
+        if: inputs.run_tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+        continue-on-error: true
+
+      - name: tflint
+        if: inputs.run_tflint
+        working-directory: ${{ env.WORKING_DIR }}
+        run: tflint --recursive --format=compact || true
+
+      - name: checkov
+        if: inputs.run_checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ env.WORKING_DIR }}
+          framework: terraform
+          quiet: true
+          soft_fail: true
+        continue-on-error: true
