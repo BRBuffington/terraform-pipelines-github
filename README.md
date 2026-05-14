@@ -1,8 +1,8 @@
 # terraform-pipelines-github
 
-Reusable GitHub Actions workflows for Terraform on Azure. Generalized port of the
-Azure DevOps templates from `terraform-pipelines-azure` (Guggenheim) — no hardcoded
-tenants, subscriptions, or service principal secrets. Auth is OIDC.
+Reusable GitHub Actions workflows for Terraform on Azure. Companion to the
+Azure DevOps templates in `terraform-pipelines-azure` — no hardcoded tenants,
+subscriptions, or service principal secrets. Auth is OIDC.
 
 ## Workflows
 

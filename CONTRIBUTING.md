@@ -51,7 +51,7 @@ Recommended backend storage account properties (informed by hard lessons):
 
 - **Disable shared key auth** on the storage account. Use AAD auth: workflow passes `use_azuread_auth=true`.
 - **Use OIDC** end-to-end: `use_oidc=true` flag is set by the workflow when `ARM_USE_OIDC=true`.
-- **Resource group naming**: keep it short and consistent. The Guggenheim convention `tfstate-rg` works (not `rg-tfstate`).
+- **Resource group naming**: keep it short and consistent. `tfstate-rg` works (not `rg-tfstate`).
 - **Key path**: `<TF_BACKEND_KEY_PREFIX>/<config>.tfstate` (one state file per environment matrix entry).
 - **Lock**: azurerm backend uses blob lease for locking automatically.
 
