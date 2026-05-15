@@ -17,6 +17,10 @@ on:
       run_checkov:
         type: boolean
         default: true
+      runs_on:
+        description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
+        type: string
+        default: '"ubuntu-latest"'
 
 permissions:
   contents: read
@@ -24,7 +28,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     defaults:
       run:
         shell: bash
