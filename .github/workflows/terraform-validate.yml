@@ -17,6 +17,10 @@ on:
       run_checkov:
         type: boolean
         default: true
+      runs_on:
+        description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
+        type: string
+        default: '"ubuntu-latest"'
 
 permissions:
   contents: read
@@ -24,7 +28,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     defaults:
       run:
         shell: bash
@@ -76,10 +80,10 @@ jobs:
 
       - name: checkov
         if: inputs.run_checkov
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: ${{ env.WORKING_DIR }}
-          framework: terraform
-          quiet: true
-          soft_fail: true
+        working-directory: ${{ env.WORKING_DIR }}
+        shell: bash
+        run: |
+          python3 -m pip install --quiet --user checkov
+          export PATH="$HOME/.local/bin:$PATH"
+          checkov -d . --framework terraform --quiet --soft-fail
         continue-on-error: true

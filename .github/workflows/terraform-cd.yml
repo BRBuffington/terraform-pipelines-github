@@ -41,6 +41,10 @@ on:
       run_checkov:
         type: boolean
         default: true
+      runs_on:
+        description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
+        type: string
+        default: '"ubuntu-latest"'
 
 permissions:
   id-token: write
@@ -50,7 +54,7 @@ permissions:
 jobs:
   plan:
     name: plan-${{ matrix.config }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}
     strategy:
       fail-fast: false
@@ -145,12 +149,12 @@ jobs:
 
       - name: checkov on plan
         if: ${{ inputs.run_checkov && !inputs.destroy }}
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          file: ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.json
-          framework: terraform_plan
-          quiet: true
-          soft_fail: true
+        working-directory: ${{ env.WORKING_DIR }}
+        shell: bash
+        run: |
+          python3 -m pip install --quiet --user checkov
+          export PATH="$HOME/.local/bin:$PATH"
+          checkov -f "${{ matrix.config }}.tfplan.json" --framework terraform_plan --quiet --soft-fail
         continue-on-error: true
 
       - name: upload plan artifact
@@ -167,7 +171,7 @@ jobs:
     name: apply-${{ matrix.config }}
     needs: plan
     if: ${{ !inputs.plan_only && needs.plan.outputs.has_changes == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}-apply
     strategy:
       fail-fast: false
