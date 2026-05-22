@@ -114,9 +114,13 @@ jobs:
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
-      - name: terraform workspace
-        working-directory: ${{ env.WORKING_DIR }}
-        run: terraform workspace select -or-create "${{ matrix.config }}"
+      # NOTE: No `terraform workspace` step. The backend `key` already gives
+      # each config its own state file (`<prefix>/<config>.tfstate`), so
+      # workspaces are redundant. A previous version of this workflow ran
+      # `terraform workspace select -or-create <config>` which created an
+      # orphan workspace at `<key>env:<config>` separate from the real state
+      # in workspace `default` — every plan since then proposed full creates
+      # against the empty orphan. See bbuf-runners 2026-05-22 incident.
 
       - name: terraform plan
         id: plan
@@ -218,9 +222,7 @@ jobs:
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
-      - name: terraform workspace
-        working-directory: ${{ env.WORKING_DIR }}
-        run: terraform workspace select "${{ matrix.config }}"
+      # No `terraform workspace` step — see comment in plan job.
 
       - name: terraform apply
         working-directory: ${{ env.WORKING_DIR }}
