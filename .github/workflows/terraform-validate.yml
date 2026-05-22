@@ -37,6 +37,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ----- Guards: rules these reusable workflows assume. -----
+      # See templates/README.md "Rules these templates encode".
+      - name: Guard - no 'terraform workspace' step in caller workflows
+        shell: bash
+        run: |
+          set -e
+          if [ -d .github/workflows ]; then
+            HITS=$(grep -RIn -E '(^|[[:space:]])terraform[[:space:]]+workspace[[:space:]]+(select|new)' .github/workflows/ || true)
+            if [ -n "${HITS}" ]; then
+              echo "::error::Found 'terraform workspace select|new' in a caller workflow."
+              echo "::error::The reusable terraform-cd workflow uses a per-config backend 'key' (one state file per config). Adding a workspace step on top creates orphan workspace blobs that desync from the real state."
+              echo "::error::See https://github.com/BRBuffington/terraform-pipelines-github/blob/main/templates/README.md#rules-these-templates-encode"
+              echo "${HITS}"
+              exit 1
+            fi
+          fi
+
+      - name: Guard - backend.hcl files set use_azuread_auth and use_oidc
+        shell: bash
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          FOUND=0
+          MISSING=""
+          for f in **/*backend*.hcl; do
+            FOUND=1
+            if ! grep -qE '^[[:space:]]*use_azuread_auth[[:space:]]*=[[:space:]]*true' "$f"; then
+              MISSING="${MISSING}${f}: missing 'use_azuread_auth = true'\n"
+            fi
+            if ! grep -qE '^[[:space:]]*use_oidc[[:space:]]*=[[:space:]]*true' "$f"; then
+              MISSING="${MISSING}${f}: missing 'use_oidc = true'\n"
+            fi
+          done
+          if [ "${FOUND}" = "0" ]; then
+            echo "No backend.hcl files found under ${WORKING_DIR} -- skipping (CI uses workflow vars, not hcl)."
+          elif [ -n "${MISSING}" ]; then
+            echo "::error::Backend hcl files missing required AAD/OIDC flags:"
+            printf "%b" "${MISSING}"
+            exit 1
+          fi
+
       - name: Resolve Terraform version
         id: tfver
         working-directory: ${{ env.WORKING_DIR }}

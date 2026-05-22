@@ -6,10 +6,20 @@ subscriptions, or service principal secrets. Auth is OIDC.
 
 ## Workflows
 
-- `.github/workflows/terraform-validate.yml` — fmt / init (no backend) / validate / tflint / Checkov.
+- `.github/workflows/terraform-validate.yml` — fmt / init (no backend) / validate / tflint / Checkov. Also enforces two guards on the calling repo: (1) no `terraform workspace select|new` in any `.github/workflows/*.yml` (incompatible with the per-config backend `key` pattern), and (2) any `backend.hcl` under `working_dir` sets `use_azuread_auth = true` and `use_oidc = true`.
 - `.github/workflows/terraform-cd.yml` — matrix plan + gated apply (GitHub Environment approval).
+- `.github/workflows/terraform-drift-detect.yml` — scheduled scan of the tfstate container; fails the run if any orphan workspace blob (`*env:*` shape) is found. Call on a cron from each consumer repo. See workflow file header for an example caller.
 
-Both are `workflow_call` reusable workflows.
+All three are `workflow_call` reusable workflows.
+
+## Templates
+
+[`templates/`](templates/README.md) holds drop-in starting points for each
+piece a consumer normally hand-writes: `backend.tf`, `backend.hcl` (for
+local init), per-env `tfvars`, and caller workflows for CD and validate.
+Every placeholder is plain `${VAR}` — render with `envsubst`, no Python or
+templating engine required. The README in that folder lists every
+placeholder and the GitHub Environment vars you need.
 
 ## Consumer setup
 
