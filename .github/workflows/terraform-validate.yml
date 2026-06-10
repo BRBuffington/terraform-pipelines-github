@@ -35,7 +35,7 @@ jobs:
     env:
       WORKING_DIR: ${{ inputs.working_dir }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.3
 
       # ----- Guards: rules these reusable workflows assume. -----
       # See templates/README.md "Rules these templates encode".
@@ -91,7 +91,7 @@ jobs:
             echo "version=1.9.5" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: ${{ steps.tfver.outputs.version }}
           terraform_wrapper: false

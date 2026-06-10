@@ -75,7 +75,7 @@ jobs:
     outputs:
       has_changes: ${{ steps.plan.outputs.has_changes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.3
 
       - name: Validate tfvars file exists
         run: |
@@ -94,7 +94,7 @@ jobs:
             echo "version=1.9.5" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: ${{ steps.tfver.outputs.version }}
           terraform_wrapper: false
@@ -157,7 +157,7 @@ jobs:
 
       - name: upload plan artifact
         if: ${{ !inputs.plan_only }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: tfplan-${{ matrix.config }}
           path: |
@@ -187,7 +187,7 @@ jobs:
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.3
 
       - name: Resolve Terraform version
         id: tfver
@@ -201,12 +201,12 @@ jobs:
             echo "version=1.9.5" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: ${{ steps.tfver.outputs.version }}
           terraform_wrapper: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: tfplan-${{ matrix.config }}
           path: ${{ env.WORKING_DIR }}
