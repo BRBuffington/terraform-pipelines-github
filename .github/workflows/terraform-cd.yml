@@ -156,10 +156,10 @@ jobs:
           BKEY: ${{ steps.bkey.outputs.key }}
         run: |
           set -euo pipefail
-          # Value comes from env (not inline ${{ }}) so a caller-controlled
-          # config/prefix cannot inject shell. The policy then validates shape;
-          # a malformed key (e.g. containing a quote) makes invalid JSON and
-          # conftest fails closed.
+          # Value comes from env (not an inline GitHub expression in the run
+          # body) so a caller-controlled config/prefix cannot inject shell. The
+          # policy then validates shape; a malformed key (e.g. containing a
+          # quote) makes invalid JSON and conftest fails closed.
           printf '{"key": "%s"}' "$BKEY" > /tmp/bkey.json
           conftest test /tmp/bkey.json \
             --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
