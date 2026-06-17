@@ -41,6 +41,14 @@ on:
       run_checkov:
         type: boolean
         default: true
+      run_opa:
+        description: "Run the OPA/conftest policy gate (backend-key convention + no unexpected destroy/recreate). Hard-fails the plan on a deny."
+        type: boolean
+        default: true
+      allow_recreate:
+        description: "Override the OPA destroy/recreate guard. Set true ONLY for a reviewed, intentional plan that deletes/replaces resources or is a genuine large first apply."
+        type: boolean
+        default: false
       runs_on:
         description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
         type: string
@@ -103,6 +111,44 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform fmt -check -recursive
 
+      # ----- OPA policy gate setup (conftest + this repo's policy/ dir) -----
+      # Self-checkout at job_workflow_sha pins the policy version to the exact
+      # reusable-workflow version the caller invoked (no drift between the gate
+      # and the workflow that runs it). Repo is public, so no token is needed.
+      - name: Setup conftest
+        if: ${{ inputs.run_opa }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFTEST_VERSION=0.56.0
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C /tmp conftest
+          sudo mv /tmp/conftest /usr/local/bin/conftest
+          conftest --version
+
+      - name: Checkout pipeline policies
+        if: ${{ inputs.run_opa }}
+        uses: actions/checkout@v6.0.3
+        with:
+          repository: BRBuffington/terraform-pipelines-github
+          ref: ${{ github.job_workflow_sha }}
+          path: .tfpipelines
+          persist-credentials: false
+
+      - name: Compute backend key
+        id: bkey
+        run: echo "key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" >> "$GITHUB_OUTPUT"
+
+      - name: OPA - backend key convention (pre-plan)
+        if: ${{ inputs.run_opa }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '{"key": "%s"}' "${{ steps.bkey.outputs.key }}" > /tmp/bkey.json
+          conftest test /tmp/bkey.json \
+            --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
+            --namespace backend_key --no-color
+
       - name: terraform init
         working-directory: ${{ env.WORKING_DIR }}
         run: |
@@ -110,7 +156,7 @@ jobs:
             -backend-config="resource_group_name=${{ vars.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
-            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
+            -backend-config="key=${{ steps.bkey.outputs.key }}" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
@@ -154,6 +200,24 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           checkov -f "${{ matrix.config }}.tfplan.json" --framework terraform_plan --quiet --soft-fail
         continue-on-error: true
+
+      # HARD gate (no continue-on-error): denies a plan that deletes/replaces
+      # live resources or mass-creates against empty/wrong state — the
+      # corpus-search 2026-06-17 "28 to add, 2 to destroy" signature. Skipped in
+      # destroy mode (deletes are intentional). Override with allow_recreate=true
+      # for a reviewed, intentional destructive/first-apply plan.
+      - name: OPA - no unexpected destroy/recreate (post-plan)
+        if: ${{ inputs.run_opa && !inputs.destroy }}
+        working-directory: ${{ env.WORKING_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '{"params": {"allow_recreate": %s, "destroy_mode": %s}}' \
+            "${{ inputs.allow_recreate }}" "${{ inputs.destroy }}" > /tmp/opa-params.json
+          conftest test "${{ matrix.config }}.tfplan.json" \
+            --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
+            --namespace main \
+            --data /tmp/opa-params.json --no-color
 
       - name: upload plan artifact
         if: ${{ !inputs.plan_only }}

@@ -116,3 +116,14 @@ break them:
 3. **Caller workflows must reference both `${ENV_NAME}` and
    `${ENV_NAME}-apply` Environments.** Plan runs in the first, apply in
    the second; required reviewers go on the apply environment.
+4. **The OPA policy gate is on by default (`run_opa = true`).** The CD plan
+   job runs two `conftest` checks (hard-fail, not soft like checkov):
+   - **backend-key convention** — the init key must be
+     `<prefix>/<config>.tfstate` (one nested state file per config). Catches a
+     flat/laptop-style key that would diverge from the per-config CD blob.
+   - **no unexpected destroy/recreate** — denies a plan that deletes/replaces
+     live resources or mass-creates against empty/wrong state (the
+     "plan wants to rebuild the whole stack" signature). Override a genuinely
+     intentional destructive or large first-apply plan with the `allow_recreate`
+     input (or the `destroy` input for a destroy run). Policies live in
+     [`policy/`](../policy) and are unit-tested by the `policy-test` workflow.
