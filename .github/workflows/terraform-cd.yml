@@ -112,10 +112,16 @@ jobs:
         run: terraform fmt -check -recursive
 
       # ----- OPA policy gate setup (conftest + this repo's policy/ dir) -----
-      # Self-checkout at the reusable workflow's OWN sha (job.workflow_sha /
-      # job.workflow_repository — the documented reusable-workflow self-checkout
-      # contexts) pins the policy version to the exact reusable-workflow version
-      # the caller invoked, with no drift. Repo is public, so no token is needed.
+      # Checkout this pipelines repo to get the policy/ dir. A reusable workflow
+      # CANNOT introspect its own repo/ref at runtime: github.workflow_ref /
+      # github.workflow_sha and the job.* context all resolve to the CALLER's
+      # entry workflow, not this reusable one (and there is no job.workflow_*
+      # context — that was the bug that 0-job-failed every caller). So derive the
+      # repo from the caller's org (github.repository_owner, which equals the
+      # owner that also hosts this reusable for our fleet and for same-org forks)
+      # and pin the ref to main. Repo is public, so no token is needed. Both
+      # values are controlled (org login + literal), so there is no injection
+      # surface in the with: block.
       - name: Setup conftest
         if: ${{ inputs.run_opa }}
         shell: bash
@@ -131,8 +137,8 @@ jobs:
         if: ${{ inputs.run_opa }}
         uses: actions/checkout@v6.0.3
         with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
+          repository: ${{ github.repository_owner }}/terraform-pipelines-github
+          ref: main
           path: .tfpipelines
           persist-credentials: false
 
