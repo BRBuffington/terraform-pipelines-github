@@ -68,15 +68,15 @@ bash -c "envsubst < templates/caller-validate.yml.tpl" | Set-Content .github\wor
 | `OWNER` | caller workflows | `BRBuffington` | The GitHub org/user that owns this `terraform-pipelines-github` repo |
 | `PIPELINES_REF` | caller workflows | `main` or `v1.2.0` | Pin to a tag/SHA for production stability |
 | `ENV_NAME` | caller-cd, tfvars | `dev`, `prod` | One env per caller workflow; matches a GitHub Environment |
-| `CONFIGS_JSON` | caller-cd | `["dev"]` or `["region-eus","region-wus"]` | JSON array of tfvars basenames (without `.tfvars`) |
+| `CONFIGS_JSON` | caller-cd | `["myapp-eus-dev"]` or `["myapp-eus-prd","myapp-wus-prd"]` | JSON array of tfvars basenames (without `.tfvars`), each `<scope>-<region>-<env>` |
 | `WORKING_DIR` | caller workflows | `.` or `infra` | Path to your Terraform root |
-| `TFVARS_DIR` | caller-cd | `environments` | Subdir of WORKING_DIR containing `<config>.tfvars` files |
+| `TFVARS_DIR` | caller-cd | `configs` | Subdir of WORKING_DIR containing the `<scope>-<region>-<env>.tfvars` files |
 | `RUNS_ON` | caller workflows | `"ubuntu-latest"` or `["self-hosted","my-pool"]` | JSON-encoded runs-on value (note quotes around string form) |
 | `RESOURCE_GROUP_NAME` | backend.hcl | `rg-tfstate-mine` | The resource group holding your tfstate storage account |
 | `STORAGE_ACCOUNT_NAME` | backend.hcl | `sttfstatemine01` | Must have `shared_access_key_enabled = false` |
 | `CONTAINER_NAME` | backend.hcl | `tfstate` | Blob container name |
 | `KEY_PREFIX` | backend.hcl | `my-stack` | Prefix for state file keys; one prefix per stack |
-| `CONFIG_NAME` | backend.hcl | `dev` | One state file per config: `${KEY_PREFIX}/${CONFIG_NAME}.tfstate` |
+| `CONFIG_NAME` | backend.hcl | `myapp-eus-dev` | `<scope>-<region>-<env>`; one state file per config: `${KEY_PREFIX}/${CONFIG_NAME}.tfstate` |
 | `SUBSCRIPTION_ID` | tfvars | GUID | Target Azure subscription |
 | `LOCATION` | tfvars | `eastus` | Azure region |
 
@@ -127,3 +127,26 @@ break them:
      intentional destructive or large first-apply plan with the `allow_recreate`
      input (or the `destroy` input for a destroy run). Policies live in
      [`policy/`](../policy) and are unit-tested by the `policy-test` workflow.
+5. **Config & tfvars naming: `configs/<scope>-<region>-<env>.tfvars`.**
+   Per-config tfvars live in `infra/configs/` and are named descriptively, NOT
+   `tier1`/`tier2`/`environments`. Format:
+   - **scope** — the workload/sub-stack (`corpus`, `policy`, `gi-mdm-data`).
+   - **region** — the CAF region alias: `eus`=eastus, `eus2`=eastus2,
+     `wus`=westus, `cus`=centralus, `ncus`=northcentralus, etc.
+   - **env** — the lifecycle suffix, kept **last** so `*-prd.tfvars` /
+     `*-dev.tfvars` glob across regions: `dev`, `tst`, `si`, `qa`, `uat`,
+     `prd`, `dr`.
+
+   Examples: `corpus-eus-prd.tfvars`, `gi-mdm-data-eus2-tst.tfvars`. The state
+   key (rule 1) mirrors the basename: `${KEY_PREFIX}/<scope>-<region>-<env>.tfstate`.
+
+   **A security posture / feature flag is a VARIABLE on one config, NOT a
+   second config.** Two configs mean two genuinely separate deployments
+   (different resources/region/env), each with its own state file. A
+   lockdown switch, a public-access toggle, etc. that mutates the SAME
+   resources must be a `var` in the single config — never a `tier1`/`tier2`
+   split (that was the corpus-search empty-state incident: two state files
+   fighting over one physical stack).
+
+   Shared (non-config) files use a `z_` prefix so they sort to the bottom of
+   `configs/`: `z_backend.tfvars`, `z_common.tfvars`, `z_tags.yaml`.
