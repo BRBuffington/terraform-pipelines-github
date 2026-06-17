@@ -19,6 +19,16 @@ test_changeme_default_denied if {
 	count(deny) > 0 with input as {"key": "changeme/tfstate"}
 }
 
+test_mixed_case_prefix_allowed if {
+	# A mixed-case TF_BACKEND_KEY_PREFIX (e.g. a repo name) is valid.
+	count(deny) == 0 with input as {"key": "MyStack/Dev.tfstate"}
+}
+
+test_multi_level_prefix_allowed if {
+	# A slash-containing prefix (team/stack) yields a multi-segment key.
+	count(deny) == 0 with input as {"key": "team/corpus-search/tier2.tfstate"}
+}
+
 test_missing_tfstate_suffix_denied if {
 	count(deny) > 0 with input as {"key": "corpus-search/tier2"}
 }

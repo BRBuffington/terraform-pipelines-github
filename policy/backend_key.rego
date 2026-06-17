@@ -12,9 +12,12 @@ package backend_key
 
 import rego.v1
 
-# Valid = one nested segment, a slash, a config segment, then `.tfstate`.
-# Lowercase alphanumerics plus . _ - in each segment (Azure blob-name safe).
-_valid if regex.match(`^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*\.tfstate$`, input.key)
+# Valid = at least one nested segment, a slash, then a final config segment
+# ending in `.tfstate`. Accepts mixed case (Azure blob names are case-sensitive
+# and a TF_BACKEND_KEY_PREFIX may be e.g. `MyStack`) and multi-level prefixes
+# (`team/stack/config.tfstate`). The load-bearing invariant is ≥ 1 slash, so a
+# flat `name.tfstate` (laptop-style) is still rejected.
+_valid if regex.match(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+\.tfstate$`, input.key)
 
 deny contains msg if {
 	not _valid

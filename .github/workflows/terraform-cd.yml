@@ -112,9 +112,10 @@ jobs:
         run: terraform fmt -check -recursive
 
       # ----- OPA policy gate setup (conftest + this repo's policy/ dir) -----
-      # Self-checkout at job_workflow_sha pins the policy version to the exact
-      # reusable-workflow version the caller invoked (no drift between the gate
-      # and the workflow that runs it). Repo is public, so no token is needed.
+      # Self-checkout at the reusable workflow's OWN sha (job.workflow_sha /
+      # job.workflow_repository — the documented reusable-workflow self-checkout
+      # contexts) pins the policy version to the exact reusable-workflow version
+      # the caller invoked, with no drift. Repo is public, so no token is needed.
       - name: Setup conftest
         if: ${{ inputs.run_opa }}
         shell: bash
@@ -130,21 +131,30 @@ jobs:
         if: ${{ inputs.run_opa }}
         uses: actions/checkout@v6.0.3
         with:
-          repository: BRBuffington/terraform-pipelines-github
-          ref: ${{ github.job_workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .tfpipelines
           persist-credentials: false
 
       - name: Compute backend key
         id: bkey
-        run: echo "key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" >> "$GITHUB_OUTPUT"
+        env:
+          KEY_PREFIX: ${{ vars.TF_BACKEND_KEY_PREFIX }}
+          CONFIG: ${{ matrix.config }}
+        run: echo "key=${KEY_PREFIX}/${CONFIG}.tfstate" >> "$GITHUB_OUTPUT"
 
       - name: OPA - backend key convention (pre-plan)
         if: ${{ inputs.run_opa }}
         shell: bash
+        env:
+          BKEY: ${{ steps.bkey.outputs.key }}
         run: |
           set -euo pipefail
-          printf '{"key": "%s"}' "${{ steps.bkey.outputs.key }}" > /tmp/bkey.json
+          # Value comes from env (not inline ${{ }}) so a caller-controlled
+          # config/prefix cannot inject shell. The policy then validates shape;
+          # a malformed key (e.g. containing a quote) makes invalid JSON and
+          # conftest fails closed.
+          printf '{"key": "%s"}' "$BKEY" > /tmp/bkey.json
           conftest test /tmp/bkey.json \
             --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
             --namespace backend_key --no-color
@@ -210,11 +220,17 @@ jobs:
         if: ${{ inputs.run_opa && !inputs.destroy }}
         working-directory: ${{ env.WORKING_DIR }}
         shell: bash
+        env:
+          CONFIG: ${{ matrix.config }}
+          ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+          DESTROY_MODE: ${{ inputs.destroy }}
         run: |
           set -euo pipefail
+          # allow_recreate / destroy are typed booleans (rendered as true|false).
+          # Values via env so nothing is interpolated into the shell.
           printf '{"params": {"allow_recreate": %s, "destroy_mode": %s}}' \
-            "${{ inputs.allow_recreate }}" "${{ inputs.destroy }}" > /tmp/opa-params.json
-          conftest test "${{ matrix.config }}.tfplan.json" \
+            "$ALLOW_RECREATE" "$DESTROY_MODE" > /tmp/opa-params.json
+          conftest test "${CONFIG}.tfplan.json" \
             --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
             --namespace main \
             --data /tmp/opa-params.json --no-color

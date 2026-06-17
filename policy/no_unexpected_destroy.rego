@@ -16,6 +16,11 @@ package main
 
 import rego.v1
 
+# allow_recreate is the operator's reviewed override. destroy_mode keeps this
+# policy correct as a STANDALONE contract (a caller that does NOT skip the step
+# in destroy mode still gets the right answer); the shipped terraform-cd.yml
+# additionally skips this step entirely when inputs.destroy is true, so the
+# destroy_mode branch is belt-and-suspenders, not the primary guard.
 _override if data.params.allow_recreate == true
 
 _override if data.params.destroy_mode == true
