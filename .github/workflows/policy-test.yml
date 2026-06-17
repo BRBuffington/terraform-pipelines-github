@@ -1,0 +1,31 @@
+# Unit-test the OPA/conftest policies in policy/ on every change.
+# Pure rego test (opa test) — no Azure, no backend — so it runs on a
+# GitHub-hosted runner (this repo is public).
+name: policy-test
+
+on:
+  pull_request:
+    paths:
+      - "policy/**"
+      - ".github/workflows/policy-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "policy/**"
+
+permissions:
+  contents: read
+
+jobs:
+  opa-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.3
+
+      - name: Setup OPA
+        uses: open-policy-agent/setup-opa@v2.2.0
+        with:
+          version: 1.4.2
+
+      - name: opa test policy/
+        run: opa test policy/ -v

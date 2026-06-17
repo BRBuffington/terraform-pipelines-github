@@ -33,6 +33,10 @@ on:
         description: "Plan only (no apply)"
         type: boolean
         default: false
+      allow_recreate:
+        description: "Override the OPA destroy/recreate guard (reviewed, intentional destructive or large first-apply plan only)"
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -46,6 +50,7 @@ jobs:
       environment: ${ENV_NAME}
       configs: '${CONFIGS_JSON}'
       plan_only: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only || false }}
+      allow_recreate: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_recreate || false }}
       working_dir: ${WORKING_DIR}
       tfvars_dir: ${TFVARS_DIR}
       runs_on: '${RUNS_ON}'
