@@ -318,3 +318,47 @@ jobs:
       - name: terraform output
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform output -no-color || true
+
+  # Stamp a LastApplied=<UTC date> tag on the stack's resources AFTER a
+  # successful apply. Kept OUT of Terraform so it reflects only on apply, never
+  # on plan — callers carry `ignore_changes = [tags["LastApplied"]]` on every
+  # taggable resource. Resources are found by the TF-managed `DeployedByRepo`
+  # tag (value = the caller repo, i.e. github.repository), so no Terraform
+  # state access is needed. This is a no-op for callers whose resources do not
+  # (yet) carry `DeployedByRepo` — `az resource list --tag` returns nothing.
+  stamp-last-applied:
+    name: stamp-last-applied
+    needs: apply
+    if: ${{ !inputs.plan_only && !inputs.destroy && needs.apply.result == 'success' }}
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    environment: ${{ inputs.environment }}-apply
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Ensure Azure CLI
+        shell: bash
+        run: command -v az >/dev/null 2>&1 || (curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash)
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Stamp LastApplied on stack resources
+        shell: bash
+        env:
+          # Value via env (not an inline GitHub expression in the run body) so
+          # nothing is interpolated into the shell. github.repository is the
+          # caller repo full name, matching each stack's DeployedByRepo tag.
+          DEPLOYED_BY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%F)
+          mapfile -t IDS < <(az resource list --tag "DeployedByRepo=${DEPLOYED_BY}" --query "[].id" -o tsv)
+          echo "Stamping LastApplied=$DATE on ${#IDS[@]} resources tagged DeployedByRepo=${DEPLOYED_BY}"
+          for id in "${IDS[@]}"; do
+            [ -z "$id" ] && continue
+            az tag update --resource-id "$id" --operation Merge --tags "LastApplied=$DATE" --only-show-errors >/dev/null
+            echo "  stamped $id"
+          done
