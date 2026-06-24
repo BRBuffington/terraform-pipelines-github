@@ -359,6 +359,11 @@ jobs:
           echo "Stamping LastApplied=$DATE on ${#IDS[@]} resources tagged DeployedByRepo=${DEPLOYED_BY}"
           for id in "${IDS[@]}"; do
             [ -z "$id" ] && continue
-            az tag update --resource-id "$id" --operation Merge --tags "LastApplied=$DATE" --only-show-errors >/dev/null
-            echo "  stamped $id"
+            # Guard per-resource: an untaggable resource type (or a transient
+            # error) must not abort the whole stamp job under `set -e`.
+            if az tag update --resource-id "$id" --operation Merge --tags "LastApplied=$DATE" --only-show-errors >/dev/null 2>&1; then
+              echo "  stamped $id"
+            else
+              echo "  skipped $id (untaggable or transient error)"
+            fi
           done
