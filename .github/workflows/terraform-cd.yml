@@ -49,6 +49,10 @@ on:
         description: "Override the OPA destroy/recreate guard. Set true ONLY for a reviewed, intentional plan that deletes/replaces resources or is a genuine large first apply."
         type: boolean
         default: false
+      stamp_last_applied:
+        description: "Stamp LastApplied after apply. Disable when the caller manages all resource tags declaratively."
+        type: boolean
+        default: true
       runs_on:
         description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
         type: string
@@ -319,17 +323,16 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform output -no-color || true
 
-  # Stamp a LastApplied=<UTC date> tag on the stack's resources AFTER a
-  # successful apply. Kept OUT of Terraform so it reflects only on apply, never
-  # on plan — callers carry `ignore_changes = [tags["LastApplied"]]` on every
-  # taggable resource. Resources are found by the TF-managed `DeployedByRepo`
-  # tag (value = the caller repo, i.e. github.repository), so no Terraform
-  # state access is needed. This is a no-op for callers whose resources do not
-  # (yet) carry `DeployedByRepo` — `az resource list --tag` returns nothing.
+  # Optionally stamp a LastApplied=<UTC date> tag on the stack's resources
+  # AFTER a successful apply. Callers that manage all tags declaratively should
+  # set stamp_last_applied=false to avoid creating post-apply drift. Resources
+  # are found by the TF-managed `DeployedByRepo` tag (value = the caller repo,
+  # i.e. github.repository), so no Terraform state access is needed. This is a
+  # no-op for callers whose resources do not carry `DeployedByRepo`.
   stamp-last-applied:
     name: stamp-last-applied
     needs: apply
-    if: ${{ !inputs.plan_only && !inputs.destroy && needs.apply.result == 'success' }}
+    if: ${{ inputs.stamp_last_applied && !inputs.plan_only && !inputs.destroy && needs.apply.result == 'success' }}
     runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}-apply
     permissions:
