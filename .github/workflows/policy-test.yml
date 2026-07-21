@@ -7,11 +7,14 @@ on:
   pull_request:
     paths:
       - "policy/**"
+      - ".github/workflows/terraform-cd.yml"
       - ".github/workflows/policy-test.yml"
   push:
     branches: [main]
     paths:
       - "policy/**"
+      - ".github/workflows/terraform-cd.yml"
+      - ".github/workflows/policy-test.yml"
 
 permissions:
   contents: read
@@ -29,3 +32,16 @@ jobs:
 
       - name: opa test policy/
         run: opa test policy/ -v
+
+  action-ref-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create smoke artifact
+        run: echo "upload-artifact v7.0.1 resolved" > action-ref-smoke.txt
+
+      - name: Resolve and run upload-artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: action-ref-smoke-${{ github.run_id }}
+          path: action-ref-smoke.txt
+          retention-days: 1
