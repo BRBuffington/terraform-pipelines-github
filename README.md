@@ -113,6 +113,10 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 | `max_parallel_plan` | `4` | |
 | `apply_timeout_minutes` | `60` | |
 | `run_checkov` | `true` | |
+| `run_opa` | `true` | Hard-fail backend-key, destructive-plan, and container image rollback policies. |
+| `allow_recreate` | `false` | Reviewed override for intentional destructive or large first-apply plans. |
+| `allow_version_rollback` | `false` | Explicit-consent override for container image rollback; honored only on `workflow_dispatch`. |
+| `stamp_last_applied` | `true` | Stamp managed resources after a successful apply. |
 
 ## Versioning
 
@@ -131,4 +135,5 @@ Until then, `@main` is fine.
 - ADO branch-name routing (`-sb`, `-dev`, `-prd`...) — replaced by GitHub Environment + protection rules.
 - ADO `pre-release` cancel-previous stage — handled by `concurrency:` in the consumer wrapper.
 - ADO `pat` for cross-repo module pulls — not needed for public modules / AVM.
-- OPA / conftest — out of scope for now (will add when policy repo is ready).
+- OPA / conftest is built in and hard-fails unsafe backend keys, unexpected
+  destroy/recreate plans, and unapproved Container App image rollbacks.

@@ -42,11 +42,15 @@ on:
         type: boolean
         default: true
       run_opa:
-        description: "Run the OPA/conftest policy gate (backend-key convention + no unexpected destroy/recreate). Hard-fails the plan on a deny."
+        description: "Run the OPA/conftest policy gate (backend key, destructive changes, and container image rollback). Hard-fails the plan on a deny."
         type: boolean
         default: true
       allow_recreate:
         description: "Override the OPA destroy/recreate guard. Set true ONLY for a reviewed, intentional plan that deletes/replaces resources or is a genuine large first apply."
+        type: boolean
+        default: false
+      allow_version_rollback:
+        description: "Override the container image rollback guard. Requires the user's explicit consent and is honored only on workflow_dispatch."
         type: boolean
         default: false
       stamp_last_applied:
@@ -221,25 +225,27 @@ jobs:
           checkov -f "${{ matrix.config }}.tfplan.json" --framework terraform_plan --quiet --soft-fail
         continue-on-error: true
 
-      # HARD gate (no continue-on-error): denies a plan that deletes/replaces
-      # live resources or mass-creates against empty/wrong state — the
-      # corpus-search 2026-06-17 "28 to add, 2 to destroy" signature. Skipped in
-      # destroy mode (deletes are intentional). Override with allow_recreate=true
-      # for a reviewed, intentional destructive/first-apply plan.
-      - name: OPA - no unexpected destroy/recreate (post-plan)
+      # HARD gate (no continue-on-error): denies destructive/mass-create plans
+      # and any existing Container App image change that is not provably
+      # equal-or-newer. A version rollback requires explicit user consent plus
+      # a workflow_dispatch override; a push can never bypass that guard.
+      - name: OPA - state safety and image rollback (post-plan)
         if: ${{ inputs.run_opa && !inputs.destroy }}
         working-directory: ${{ env.WORKING_DIR }}
         shell: bash
         env:
           CONFIG: ${{ matrix.config }}
           ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+          ALLOW_VERSION_ROLLBACK: ${{ inputs.allow_version_rollback }}
           DESTROY_MODE: ${{ inputs.destroy }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          # allow_recreate / destroy are typed booleans (rendered as true|false).
+          # Override values are typed booleans (rendered as true|false). Rego
+          # independently requires EVENT_NAME=workflow_dispatch for rollback.
           # Values via env so nothing is interpolated into the shell.
-          printf '{"params": {"allow_recreate": %s, "destroy_mode": %s}}' \
-            "$ALLOW_RECREATE" "$DESTROY_MODE" > /tmp/opa-params.json
+          printf '{"params": {"allow_recreate": %s, "allow_version_rollback": %s, "destroy_mode": %s, "event_name": "%s"}}' \
+            "$ALLOW_RECREATE" "$ALLOW_VERSION_ROLLBACK" "$DESTROY_MODE" "$EVENT_NAME" > /tmp/opa-params.json
           conftest test "${CONFIG}.tfplan.json" \
             --policy "${GITHUB_WORKSPACE}/.tfpipelines/policy" \
             --namespace main \
