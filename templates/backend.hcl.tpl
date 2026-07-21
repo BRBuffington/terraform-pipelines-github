@@ -5,7 +5,7 @@
 #   export STORAGE_ACCOUNT_NAME=sttfstatemine01
 #   export CONTAINER_NAME=tfstate
 #   export KEY_PREFIX=my-stack
-#   export CONFIG_NAME=dev
+#   export CONFIG_NAME=myapp-eus-dev    # <scope>-<region>-<env>, matches the tfvars basename
 #   envsubst < templates/backend.hcl.tpl > backend.hcl
 #
 # After rendering:

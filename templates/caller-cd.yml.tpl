@@ -5,9 +5,9 @@
 #   export OWNER=BRBuffington
 #   export PIPELINES_REF=main          # or a pinned tag/sha
 #   export ENV_NAME=dev
-#   export CONFIGS_JSON='["dev"]'      # JSON array of tfvars basenames
-#   export WORKING_DIR=.
-#   export TFVARS_DIR=environments
+#   export CONFIGS_JSON='["myapp-eus-dev"]'   # tfvars basenames, <scope>-<region>-<env>
+#   export WORKING_DIR=infra
+#   export TFVARS_DIR=configs
 #   export RUNS_ON='"ubuntu-latest"'   # or '["self-hosted","my-pool"]'
 #   envsubst < templates/caller-cd.yml.tpl > .github/workflows/dev-cd.yml
 #
@@ -25,7 +25,6 @@ on:
     branches: [main]
     paths:
       - "${WORKING_DIR}/**"
-      - "${WORKING_DIR}/${TFVARS_DIR}/${ENV_NAME}.tfvars"
       - ".github/workflows/${ENV_NAME}-cd.yml"
   workflow_dispatch:
     inputs:
