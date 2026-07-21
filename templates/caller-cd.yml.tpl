@@ -37,6 +37,10 @@ on:
         description: "Override the OPA destroy/recreate guard (reviewed, intentional destructive or large first-apply plan only)"
         type: boolean
         default: false
+      allow_version_rollback:
+        description: "Override the container image rollback guard (explicit user consent required)"
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -51,6 +55,7 @@ jobs:
       configs: '${CONFIGS_JSON}'
       plan_only: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_only || false }}
       allow_recreate: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_recreate || false }}
+      allow_version_rollback: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_version_rollback == true }}
       working_dir: ${WORKING_DIR}
       tfvars_dir: ${TFVARS_DIR}
       runs_on: '${RUNS_ON}'
