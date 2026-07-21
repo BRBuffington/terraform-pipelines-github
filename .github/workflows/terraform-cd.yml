@@ -315,9 +315,41 @@ jobs:
       # No `terraform workspace` step — see comment in plan job.
 
       - name: terraform apply
+        id: apply
         working-directory: ${{ env.WORKING_DIR }}
         timeout-minutes: ${{ fromJSON(inputs.apply_timeout_minutes) }}
-        run: terraform apply -input=false -no-color -auto-approve "${{ matrix.config }}.tfplan"
+        run: |
+          set -o pipefail
+          terraform apply -input=false -no-color -auto-approve "${{ matrix.config }}.tfplan" 2>&1 | tee apply.log
+
+      - name: Surface apply tail to step summary
+        if: ${{ always() && hashFiles(format('{0}/apply.log', env.WORKING_DIR)) != '' }}
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          status_icon="✅"
+          if [[ "${{ steps.apply.outcome }}" != "success" ]]; then status_icon="❌"; fi
+          {
+            echo "## ${status_icon} terraform apply: ${{ matrix.config }} (${{ steps.apply.outcome }})"
+            echo ""
+            echo "<details><summary>Last 80 lines of apply.log</summary>"
+            echo ""
+            echo '```'
+            # Drop the "Still creating/destroying/reading... [Xs elapsed]" progress
+            # noise so the tail surfaces real diagnostics (creates, errors, locks).
+            awk '!/Still (creating|destroying|reading|modifying)\.\.\. \[[0-9]+[ms] elapsed\]/' apply.log | tail -n 80
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload apply log
+        if: ${{ always() && hashFiles(format('{0}/apply.log', env.WORKING_DIR)) != '' }}
+        # Published release: https://github.com/actions/upload-artifact/releases/tag/v7.0.1
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: apply-log-${{ matrix.config }}
+          path: ${{ env.WORKING_DIR }}/apply.log
+          retention-days: 14
 
       - name: terraform output
         working-directory: ${{ env.WORKING_DIR }}
