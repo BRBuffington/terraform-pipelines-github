@@ -1,0 +1,138 @@
+# Reusable workflow: scan a Terraform state container for orphan workspace blobs.
+#
+# Detects state files of the form `<key-prefix>/<config>.tfstateenv:<name>`,
+# which are created when a pipeline combines per-config backend `key` with
+# `terraform workspace select`. The orphan blob is empty / near-empty and
+# every subsequent plan refreshes IT instead of the real state, leading to
+# spurious "must be created" diffs for resources that already exist.
+#
+# This workflow is meant to be called on a schedule from each consumer repo
+# AND/OR run on-demand. It runs `az storage blob list` against the configured
+# state container and fails the run if any orphan-shaped blob is present.
+#
+# Required GitHub Environment vars (in the env named by `environment` input):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   TF_BACKEND_RESOURCE_GROUP, TF_BACKEND_STORAGE_ACCOUNT, TF_BACKEND_CONTAINER
+#
+# Example caller (drop in .github/workflows/tfstate-drift.yml of your repo):
+#
+#   name: tfstate-drift
+#   on:
+#     schedule: [{ cron: "0 7 * * 1" }]   # Mondays 07:00 UTC
+#     workflow_dispatch: {}
+#   permissions: { id-token: write, contents: read }
+#   jobs:
+#     drift:
+#       uses: BRBuffington/terraform-pipelines-github/.github/workflows/terraform-drift-detect.yml@main
+#       with:
+#         environment: prod
+#         runs_on: '"ubuntu-latest"'
+
+name: terraform-drift-detect
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name that exposes the AZURE_* and TF_BACKEND_* vars."
+        type: string
+        required: true
+      runs_on:
+        description: "JSON-encoded runs-on (e.g. '\"ubuntu-latest\"' or '[\"self-hosted\",\"my-pool\"]')."
+        type: string
+        required: false
+        default: '"ubuntu-latest"'
+      key_prefix_filter:
+        description: "Optional prefix to scope the scan (e.g. 'my-stack'). Empty = whole container."
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  drift:
+    name: Scan ${{ inputs.environment }} tfstate container for orphan workspaces
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: List blobs in tfstate container
+        id: list
+        shell: bash
+        env:
+          RG: ${{ vars.TF_BACKEND_RESOURCE_GROUP }}
+          SA: ${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}
+          CONTAINER: ${{ vars.TF_BACKEND_CONTAINER }}
+          PREFIX: ${{ inputs.key_prefix_filter }}
+        run: |
+          set -euo pipefail
+          echo "Resource group: ${RG}"
+          echo "Storage account: ${SA}"
+          echo "Container: ${CONTAINER}"
+          echo "Prefix filter: ${PREFIX:-<none>}"
+
+          # --auth-mode login picks up the federated identity from azure/login
+          if [ -n "${PREFIX}" ]; then
+            az storage blob list \
+              --account-name "${SA}" \
+              --container-name "${CONTAINER}" \
+              --prefix "${PREFIX}" \
+              --auth-mode login \
+              --query "[].{name:name, size:properties.contentLength, modified:properties.lastModified}" \
+              --output json > all-blobs.json
+          else
+            az storage blob list \
+              --account-name "${SA}" \
+              --container-name "${CONTAINER}" \
+              --auth-mode login \
+              --query "[].{name:name, size:properties.contentLength, modified:properties.lastModified}" \
+              --output json > all-blobs.json
+          fi
+
+          # Orphan-workspace shape: any blob whose name contains 'env:'.
+          # Real per-config state files end in `.tfstate`; orphan workspaces
+          # end in `.tfstateenv:<name>` or are under a `env:<name>` segment.
+          jq '[.[] | select(.name | contains("env:"))]' all-blobs.json > orphans.json
+          COUNT=$(jq 'length' orphans.json)
+          echo "orphan_count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "## Terraform state container scan" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Total blobs: $(jq 'length' all-blobs.json)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Orphan workspace blobs: ${COUNT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COUNT}" -gt 0 ]; then
+            echo "### Offending blobs" >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat orphans.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: tfstate-blob-scan-${{ inputs.environment }}
+          path: |
+            all-blobs.json
+            orphans.json
+          retention-days: 30
+
+      - name: Fail if orphans found
+        if: steps.list.outputs.orphan_count != '0'
+        shell: bash
+        run: |
+          echo "::error::Found ${{ steps.list.outputs.orphan_count }} orphan workspace blob(s) in tfstate container."
+          echo "::error::These are created when a pipeline combines per-config backend 'key' with 'terraform workspace select'."
+          echo "::error::See https://github.com/BRBuffington/terraform-pipelines-github/blob/main/templates/README.md#rules-these-templates-encode"
+          exit 1
