@@ -344,6 +344,7 @@ jobs:
 
       - name: Upload apply log
         if: ${{ always() && hashFiles(format('{0}/apply.log', env.WORKING_DIR)) != '' }}
+        # Published release: https://github.com/actions/upload-artifact/releases/tag/v7.0.1
         uses: actions/upload-artifact@v7.0.1
         with:
           name: apply-log-${{ matrix.config }}
