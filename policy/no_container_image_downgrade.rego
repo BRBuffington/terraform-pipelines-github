@@ -16,32 +16,63 @@ _container_images(state) := {container.name: container.image |
 	some container in template.container
 }
 
-_version_parts(image) := parts if {
-	matches := regex.find_all_string_submatch_n(`:v?([0-9]+(?:\.[0-9]+){0,3})(?:[-+][^@]+)?(?:@sha256:[a-fA-F0-9]+)?$`, image, 1)
+_version(image) := version if {
+	matches := regex.find_all_string_submatch_n(`:v?([0-9]+(?:\.[0-9]+){0,3})(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?(?:@sha256:[a-fA-F0-9]+)?$`, image, 1)
 	count(matches) == 1
 	raw_parts := [to_number(part) | some part in split(matches[0][1], ".")]
 	padded := array.concat(raw_parts, [0, 0, 0, 0])
-	parts := [padded[0], padded[1], padded[2], padded[3]]
+	version := {
+		"parts": [padded[0], padded[1], padded[2], padded[3]],
+		"prerelease": matches[0][2],
+		"build": matches[0][3],
+	}
 }
 
-_version_is_lower(after, before) if after[0] < before[0]
+_numeric_version_is_lower(after, before) if after[0] < before[0]
 
-_version_is_lower(after, before) if {
+_numeric_version_is_lower(after, before) if {
 	after[0] == before[0]
 	after[1] < before[1]
 }
 
-_version_is_lower(after, before) if {
+_numeric_version_is_lower(after, before) if {
 	after[0] == before[0]
 	after[1] == before[1]
 	after[2] < before[2]
 }
 
-_version_is_lower(after, before) if {
+_numeric_version_is_lower(after, before) if {
 	after[0] == before[0]
 	after[1] == before[1]
 	after[2] == before[2]
 	after[3] < before[3]
+}
+
+_same_numeric_version(after, before) if after.parts == before.parts
+
+_version_is_lower(after, before) if _numeric_version_is_lower(after.parts, before.parts)
+
+# Under SemVer, a prerelease has lower precedence than the corresponding stable
+# release. This is the council-caught 1.0.0 -> 1.0.0-alpha bypass.
+_version_is_lower(after, before) if {
+	_same_numeric_version(after, before)
+	before.prerelease == ""
+	after.prerelease != ""
+}
+
+_version_transition_unverifiable(after, before) if {
+	_same_numeric_version(after, before)
+	before.prerelease != ""
+	after.prerelease != ""
+	before.prerelease != after.prerelease
+}
+
+# Build metadata has no SemVer precedence. A changed build on the same numeric
+# and prerelease version cannot be proven newer, so the gate stays closed.
+_version_transition_unverifiable(after, before) if {
+	_same_numeric_version(after, before)
+	before.prerelease == after.prerelease
+	before.build != after.build
 }
 
 _changed_container_images contains change if {
@@ -64,19 +95,26 @@ _changed_container_images contains change if {
 
 _downgrades contains change if {
 	some change in _changed_container_images
-	before_version := _version_parts(change.before)
-	after_version := _version_parts(change.after)
+	before_version := _version(change.before)
+	after_version := _version(change.after)
 	_version_is_lower(after_version, before_version)
 }
 
 _unverifiable_changes contains change if {
 	some change in _changed_container_images
-	not _version_parts(change.before)
+	not _version(change.before)
 }
 
 _unverifiable_changes contains change if {
 	some change in _changed_container_images
-	not _version_parts(change.after)
+	not _version(change.after)
+}
+
+_unverifiable_changes contains change if {
+	some change in _changed_container_images
+	before_version := _version(change.before)
+	after_version := _version(change.after)
+	_version_transition_unverifiable(after_version, before_version)
 }
 
 deny contains msg if {

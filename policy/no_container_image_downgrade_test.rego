@@ -49,6 +49,38 @@ test_semantic_minor_upgrade_passes if {
 	count(deny) == 0 with input as plan with data.params as _strict_versions
 }
 
+test_stable_to_prerelease_is_denied if {
+	plan := _container_plan(
+		"registry.example/app:1.0.0",
+		"registry.example/app:1.0.0-alpha",
+	)
+	count(deny) > 0 with input as plan with data.params as _strict_versions
+}
+
+test_prerelease_to_stable_passes if {
+	plan := _container_plan(
+		"registry.example/app:1.0.0-alpha",
+		"registry.example/app:1.0.0",
+	)
+	count(deny) == 0 with input as plan with data.params as _strict_versions
+}
+
+test_ambiguous_prerelease_change_is_denied if {
+	plan := _container_plan(
+		"registry.example/app:1.0.0-alpha.2",
+		"registry.example/app:1.0.0-alpha.1",
+	)
+	count(deny) > 0 with input as plan with data.params as _strict_versions
+}
+
+test_same_version_build_change_is_denied if {
+	plan := _container_plan(
+		"registry.example/app:1.0.0+build.2",
+		"registry.example/app:1.0.0+build.1",
+	)
+	count(deny) > 0 with input as plan with data.params as _strict_versions
+}
+
 test_explicit_rollback_override_passes if {
 	plan := _container_plan(
 		"acrbbufhandoffeus.azurecr.io/corpus-mcp:0.29",
