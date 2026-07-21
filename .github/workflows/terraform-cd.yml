@@ -88,8 +88,6 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-    outputs:
-      has_changes: ${{ steps.plan.outputs.has_changes }}
     steps:
       - uses: actions/checkout@v6.0.3
 
@@ -193,7 +191,6 @@ jobs:
       # against the empty orphan. See bbuf-runners 2026-05-22 incident.
 
       - name: terraform plan
-        id: plan
         working-directory: ${{ env.WORKING_DIR }}
         run: |
           set +e
@@ -206,8 +203,8 @@ jobs:
           ec=${PIPESTATUS[0]}
           set -e
           case $ec in
-            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
-            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            0) echo "Plan has no changes; apply will safely no-op when enabled." ;;
+            2) echo "Plan has changes." ;;
             *) echo "::error::plan failed (exit $ec)"; exit $ec ;;
           esac
 
@@ -264,7 +261,9 @@ jobs:
   apply:
     name: apply-${{ matrix.config }}
     needs: plan
-    if: ${{ !inputs.plan_only && needs.plan.outputs.has_changes == 'true' }}
+    # Matrix job outputs are not aggregated by GitHub Actions. Run each saved
+    # plan whenever apply is enabled; unchanged plans complete as safe no-ops.
+    if: ${{ !inputs.plan_only }}
     runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}-apply
     strategy:
