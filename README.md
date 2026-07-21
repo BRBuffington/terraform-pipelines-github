@@ -105,7 +105,7 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 |---|---|---|
 | `environment` | required | GitHub Environment (must match a federated cred). |
 | `configs` | required | JSON array string, e.g. `'["dev"]'`. Each maps to `<tfvars_dir>/<config>.tfvars`. |
-| `plan_only` | `true` | When false, gated apply runs after plan. |
+| `plan_only` | `true` | When false, every matrix config applies its saved plan; unchanged plans safely no-op. |
 | `destroy` | `false` | Adds `-destroy`. |
 | `working_dir` | `.` | |
 | `tfvars_dir` | `environments` | Relative to `working_dir`. |

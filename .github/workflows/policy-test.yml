@@ -7,12 +7,14 @@ on:
   pull_request:
     paths:
       - "policy/**"
+      - "tests/**"
       - ".github/workflows/terraform-cd.yml"
       - ".github/workflows/policy-test.yml"
   push:
     branches: [main]
     paths:
       - "policy/**"
+      - "tests/**"
       - ".github/workflows/terraform-cd.yml"
       - ".github/workflows/policy-test.yml"
 
@@ -32,6 +34,9 @@ jobs:
 
       - name: opa test policy/
         run: opa test policy/ -v
+
+      - name: workflow contract tests
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
 
   action-ref-smoke:
     runs-on: ubuntu-latest
