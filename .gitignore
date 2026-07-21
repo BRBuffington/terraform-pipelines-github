@@ -5,6 +5,8 @@
 .terraform.lock.hcl
 *.tfplan
 *.tfplan.json
+__pycache__/
+*.py[cod]
 
 # Editor
 .vscode/
