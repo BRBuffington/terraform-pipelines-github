@@ -336,7 +336,7 @@ jobs:
             echo '```'
             # Drop the "Still creating/destroying/reading... [Xs elapsed]" progress
             # noise so the tail surfaces real diagnostics (creates, errors, locks).
-            grep -Ev 'Still (creating|destroying|reading|modifying)\.\.\. \[[0-9]+[ms] elapsed\]' apply.log | tail -n 80
+            awk '!/Still (creating|destroying|reading|modifying)\.\.\. \[[0-9]+[ms] elapsed\]/' apply.log | tail -n 80
             echo '```'
             echo ""
             echo "</details>"
@@ -344,7 +344,7 @@ jobs:
 
       - name: Upload apply log
         if: ${{ always() && hashFiles(format('{0}/apply.log', env.WORKING_DIR)) != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v8.0.1
         with:
           name: apply-log-${{ matrix.config }}
           path: ${{ env.WORKING_DIR }}/apply.log
