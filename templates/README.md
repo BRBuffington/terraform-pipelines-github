@@ -11,7 +11,7 @@ templating engine).
 |------|---------------------|---------|
 | `backend.tf.tpl` | `backend.tf` (verbatim, no rendering) | `terraform {}` + provider versions + empty `backend "azurerm" {}` block |
 | `backend.hcl.tpl` | `backend.hcl` (for local init only) | Backend config for `terraform init -backend-config=` when running locally |
-| `tfvars.tpl` | `environments/<env>.tfvars` | Per-environment variable file |
+| `tfvars.tpl` | `configs/<scope>-<region>-<env>.tfvars` | Per-deployment variable file |
 | `caller-cd.yml.tpl` | `.github/workflows/<env>-cd.yml` | Workflow that calls the reusable `terraform-cd.yml` |
 | `caller-validate.yml.tpl` | `.github/workflows/terraform-validate.yml` | Workflow that calls the reusable `terraform-validate.yml` on PRs |
 
@@ -26,20 +26,20 @@ available on every CI runner.
 export OWNER=BRBuffington
 export PIPELINES_REF=main
 export ENV_NAME=dev
-export CONFIGS_JSON='["dev"]'
-export WORKING_DIR=.
-export TFVARS_DIR=environments
+export CONFIGS_JSON='["myapp-eus-dev"]'
+export WORKING_DIR=infra
+export TFVARS_DIR=configs
 export RUNS_ON='"ubuntu-latest"'
 
-mkdir -p .github/workflows environments
+mkdir -p .github/workflows infra/configs
 envsubst < templates/caller-cd.yml.tpl > .github/workflows/dev-cd.yml
 envsubst < templates/caller-validate.yml.tpl > .github/workflows/terraform-validate.yml
 
 export SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
 export LOCATION=eastus
-envsubst < templates/tfvars.tpl > environments/dev.tfvars
+envsubst < templates/tfvars.tpl > infra/configs/myapp-eus-dev.tfvars
 
-cp templates/backend.tf.tpl backend.tf
+cp templates/backend.tf.tpl infra/backend.tf
 ```
 
 ### PowerShell (Windows)
@@ -49,14 +49,14 @@ $vars = @{
   OWNER         = "BRBuffington"
   PIPELINES_REF = "main"
   ENV_NAME      = "dev"
-  CONFIGS_JSON  = '["dev"]'
-  WORKING_DIR   = "."
-  TFVARS_DIR    = "environments"
+  CONFIGS_JSON  = '["myapp-eus-dev"]'
+  WORKING_DIR   = "infra"
+  TFVARS_DIR    = "configs"
   RUNS_ON       = '"ubuntu-latest"'
 }
 $vars.GetEnumerator() | ForEach-Object { Set-Item "env:$($_.Key)" $_.Value }
 
-New-Item -ItemType Directory -Force .github\workflows, environments | Out-Null
+New-Item -ItemType Directory -Force .github\workflows, infra\configs | Out-Null
 bash -c "envsubst < templates/caller-cd.yml.tpl"       | Set-Content .github\workflows\dev-cd.yml
 bash -c "envsubst < templates/caller-validate.yml.tpl" | Set-Content .github\workflows\terraform-validate.yml
 ```
