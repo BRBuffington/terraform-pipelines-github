@@ -2,7 +2,8 @@
 
 Reusable GitHub Actions workflows for Terraform on Azure. Companion to the
 Azure DevOps templates in `terraform-pipelines-azure` — no hardcoded tenants,
-subscriptions, or service principal secrets. Auth is OIDC.
+subscriptions, or service principal secrets. Auth defaults to OIDC; trusted
+Azure-hosted runners can explicitly use their attached deployment identity.
 
 ## Workflows
 
@@ -117,6 +118,29 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 | `allow_recreate` | `false` | Reviewed override for intentional destructive or large first-apply plans. |
 | `allow_version_rollback` | `false` | Explicit-consent override for container image rollback; honored only on `workflow_dispatch`. |
 | `stamp_last_applied` | `true` | Stamp managed resources after a successful apply. |
+| `use_managed_identity` | `false` | Use an attached subscription deployment identity on a trusted Azure-hosted runner. No per-repository federation is required. |
+
+### Trusted subscription deployment identity
+
+For repositories sharing an approved subscription trust boundary, set
+`use_managed_identity: true` and select the attached identity through the
+existing `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`
+environment variables. Plan, saved-plan apply and tag stamping use the same
+selection. Terraform backend/providers use Azure CLI authentication after
+direct managed-identity login; no client secret or GitHub token is exchanged.
+
+The runner must have that identity attached and already authorized for the
+target subscription and private state storage. Identity grants, state keys,
+required-review environments and saved-plan behavior do not change. This mode
+is for the trusted deployment runner, not an isolation boundary for untrusted
+application jobs. Existing callers remain on OIDC until explicitly migrated;
+keep their credentials until each migration is qualified.
+
+Azure CLI is installed when absent using Microsoft's existing official
+installer. The job-local MSAL setting supports the Container Apps identity
+endpoint even when the runner's OS feed supplies CLI2.72.0. Installation and
+login are bounded. Different-tenant subscriptions require an independently
+qualified identity and runner context, not an assumed cross-tenant attachment.
 
 ## Versioning
 
