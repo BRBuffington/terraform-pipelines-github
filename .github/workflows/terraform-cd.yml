@@ -57,6 +57,10 @@ on:
         description: "Stamp LastApplied after apply. Disable when the caller manages all resource tags declaratively."
         type: boolean
         default: true
+      use_managed_identity:
+        description: "Use the trusted Azure-hosted runner's attached subscription identity instead of GitHub OIDC."
+        type: boolean
+        default: false
       runs_on:
         description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
         type: string
@@ -83,13 +87,35 @@ jobs:
     env:
       WORKING_DIR: ${{ inputs.working_dir }}
       TFVARS_DIR: ${{ inputs.tfvars_dir }}
-      ARM_USE_OIDC: "true"
+      ARM_USE_OIDC: ${{ !inputs.use_managed_identity }}
+      ARM_USE_CLI: ${{ inputs.use_managed_identity }}
+      ARM_USE_MSI: "false"
       ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CORE_USE_MSAL_MANAGED_IDENTITY: "true"
     steps:
       - uses: actions/checkout@v6.0.3
+
+      - name: Direct managed identity login
+        if: ${{ inputs.use_managed_identity }}
+        run: |
+          set -euo pipefail
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/azure-deployment"
+          printf 'AZURE_CONFIG_DIR=%s\n' "$AZURE_CONFIG_DIR" >> "$GITHUB_ENV"
+          test -n "$ARM_CLIENT_ID"
+          test -n "$ARM_TENANT_ID"
+          test -n "$ARM_SUBSCRIPTION_ID"
+          if ! command -v az >/dev/null 2>&1; then
+            curl --fail --silent --show-error --location --max-time 60 \
+              https://aka.ms/InstallAzureCLIDeb -o "$RUNNER_TEMP/install-azure-cli.sh"
+            timeout 240s sudo bash "$RUNNER_TEMP/install-azure-cli.sh"
+          fi
+          timeout 90s az login --identity --client-id "$ARM_CLIENT_ID" --output none
+          timeout 30s az account set --subscription "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query id --output tsv)" = "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query tenantId --output tsv)" = "$ARM_TENANT_ID"
 
       - name: Validate tfvars file exists
         run: |
@@ -180,7 +206,8 @@ jobs:
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ steps.bkey.outputs.key }}" \
             -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=true"
+            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}" \
+            -backend-config="use_cli=${{ inputs.use_managed_identity }}"
 
       # NOTE: No `terraform workspace` step. The backend `key` already gives
       # each config its own state file (`<prefix>/<config>.tfstate`), so
@@ -276,13 +303,35 @@ jobs:
         shell: bash
     env:
       WORKING_DIR: ${{ inputs.working_dir }}
-      ARM_USE_OIDC: "true"
+      ARM_USE_OIDC: ${{ !inputs.use_managed_identity }}
+      ARM_USE_CLI: ${{ inputs.use_managed_identity }}
+      ARM_USE_MSI: "false"
       ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CORE_USE_MSAL_MANAGED_IDENTITY: "true"
     steps:
       - uses: actions/checkout@v6.0.3
+
+      - name: Direct managed identity login
+        if: ${{ inputs.use_managed_identity }}
+        run: |
+          set -euo pipefail
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/azure-deployment"
+          printf 'AZURE_CONFIG_DIR=%s\n' "$AZURE_CONFIG_DIR" >> "$GITHUB_ENV"
+          test -n "$ARM_CLIENT_ID"
+          test -n "$ARM_TENANT_ID"
+          test -n "$ARM_SUBSCRIPTION_ID"
+          if ! command -v az >/dev/null 2>&1; then
+            curl --fail --silent --show-error --location --max-time 60 \
+              https://aka.ms/InstallAzureCLIDeb -o "$RUNNER_TEMP/install-azure-cli.sh"
+            timeout 240s sudo bash "$RUNNER_TEMP/install-azure-cli.sh"
+          fi
+          timeout 90s az login --identity --client-id "$ARM_CLIENT_ID" --output none
+          timeout 30s az account set --subscription "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query id --output tsv)" = "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query tenantId --output tsv)" = "$ARM_TENANT_ID"
 
       - name: Resolve Terraform version
         id: tfver
@@ -315,7 +364,8 @@ jobs:
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
             -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=true"
+            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}" \
+            -backend-config="use_cli=${{ inputs.use_managed_identity }}"
 
       # No `terraform workspace` step — see comment in plan job.
 
@@ -375,11 +425,37 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_CORE_USE_MSAL_MANAGED_IDENTITY: "true"
     steps:
       - name: Ensure Azure CLI
+        if: ${{ !inputs.use_managed_identity }}
         shell: bash
         run: command -v az >/dev/null 2>&1 || (curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash)
+      - name: Direct managed identity login
+        if: ${{ inputs.use_managed_identity }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AZURE_CONFIG_DIR="$RUNNER_TEMP/azure-deployment"
+          printf 'AZURE_CONFIG_DIR=%s\n' "$AZURE_CONFIG_DIR" >> "$GITHUB_ENV"
+          test -n "$ARM_CLIENT_ID"
+          test -n "$ARM_TENANT_ID"
+          test -n "$ARM_SUBSCRIPTION_ID"
+          if ! command -v az >/dev/null 2>&1; then
+            curl --fail --silent --show-error --location --max-time 60 \
+              https://aka.ms/InstallAzureCLIDeb -o "$RUNNER_TEMP/install-azure-cli.sh"
+            timeout 240s sudo bash "$RUNNER_TEMP/install-azure-cli.sh"
+          fi
+          timeout 90s az login --identity --client-id "$ARM_CLIENT_ID" --output none
+          timeout 30s az account set --subscription "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query id --output tsv)" = "$ARM_SUBSCRIPTION_ID"
+          test "$(timeout 30s az account show --query tenantId --output tsv)" = "$ARM_TENANT_ID"
       - name: Azure login (OIDC)
+        if: ${{ !inputs.use_managed_identity }}
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
