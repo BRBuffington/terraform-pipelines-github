@@ -1,5 +1,32 @@
 # Subscription Deployment Identity Implementation Notes
 
+## 2026-10-30 - Preserve legacy OIDC backend compatibility
+
+The owner approved removing only the redundant `use_cli` backend arguments
+from plan/apply init. Handoff plan41150661556/job124386140487 failed on the
+unchanged Terraform1.9.5/OIDC caller because its backend rejects that argument
+even when false. No plan or apply was produced.
+
+Official HashiCorp backend documentation and versioned1.9.5/1.17.1 source
+confirm current backends accept `ARM_USE_CLI`;1.9.5 has no `use_cli` schema key.
+Both jobs already set `ARM_USE_CLI` and `ARM_USE_OIDC`, so preserve those values,
+the opt-in default, all three login paths, versions, identities, roles, state
+keys, saved-plan and safety gates. The existing contract now rejects the
+unsupported argument in both init jobs while retaining authentication checks.
+
+Leverage scan: no matches. Infra: reuse existing bbuf-runners; defer Corpus,
+synthesizer and indexer changes. Canonical runner inventory documents private
+state reachability; do not infer a network blocker or introduce a PNA fallback.
+Local validation, normal CI/independent review and real plan-only qualification
+of legacy OIDC and current direct identity remain required before deployment.
+
+Local validation passes all3workflow contracts and15subtests, including the
+actual login scripts' success/failure/authority checks and rejection of the
+unsupported argument in both init jobs. Ruff and patch hygiene pass.
+Raw actionlint on both this change and immutable basea217eb1 reports only the
+same pre-existing SC2086 plan-script warning; excluding that exact diagnostic
+leaves actionlint clean. No workflow checks or safety policies were disabled.
+
 ## 2026-10-30 - Approved Direction And First Qualification
 
 The owner rejected unnecessary repository/application isolation for this
