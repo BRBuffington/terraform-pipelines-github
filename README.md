@@ -129,6 +129,13 @@ environment variables. Plan, saved-plan apply and tag stamping use the same
 selection. Terraform backend/providers use Azure CLI authentication after
 direct managed-identity login; no client secret or GitHub token is exchanged.
 
+Authentication selection uses `ARM_USE_CLI` and `ARM_USE_OIDC`. The init commands
+do not pass a `use_cli` backend argument: Terraform 1.9.5 does not recognize it,
+even when false. Current backends read the documented `ARM_USE_CLI` setting,
+preserving direct identity without breaking the existing older OIDC callers.
+See the [AzureRM backend documentation](https://developer.hashicorp.com/terraform/language/backend/azurerm#microsoft-entra-id-with-azure-cli)
+and [Terraform 1.9.5 backend schema](https://github.com/hashicorp/terraform/blob/v1.9.5/internal/backend/remote-state/azure/backend.go).
+
 The runner must have that identity attached and already authorized for the
 target subscription and private state storage. Identity grants, state keys,
 required-review environments and saved-plan behavior do not change. This mode

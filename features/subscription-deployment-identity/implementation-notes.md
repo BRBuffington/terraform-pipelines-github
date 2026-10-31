@@ -1,5 +1,61 @@
 # Subscription Deployment Identity Implementation Notes
 
+## 2026-10-31 - Actual legacy and direct-identity candidate plans pass
+
+Immutable candidate56c68181cdba335df7d5659b7b155bafad64c68a was qualified
+through two isolated caller fixtures from fresh default branches. Each fixture
+changes only the reusable workflow ref; no authentication, Terraform version,
+resource configuration or production branch was changed.
+
+Handoff run41172079263/job124451997981, caller2ce0a66941eca1ae1a3d6d07bade357a9e2a0651,
+selected Terraform1.9.5, ARM_USE_OIDC=true/ARM_USE_CLI=false and the existing
+handoff-infra/synthesizer.tfstate key. Initialization and plan pass; the full
+plan says No changes. Both the backend-key test and all4post-plan OPA tests pass.
+The complete749line UTF8/LF log SHA256 is
+6f9185f663a1716ffd88d00acc860d148136b61cb7e90fa77dad117af2ad8f5e.
+
+Runner run41172088271/job124452027626, caller2e1631c9abcd09b9a508e3f2340e7e42b87b1451,
+selected Terraform1.17.1, ARM_USE_OIDC=false/ARM_USE_CLI=true and the existing
+bbuf-runners/runners-eus-prd.tfstate key. Initialization and plan pass with
+No changes; backend-key and all4post-plan OPA tests pass. Its complete813line
+UTF8/LF log SHA256 is
+87405cc77329d4dd31225d92563ed2bd35eb84145cf9bd200a339e6905b5397d.
+
+GitHub independently reports exact reusable SHA56c68181 for both runs.
+Apply and LastApplied stamping were skipped in both. The fixed workflow blob
+is52cfb42f89f29802dfbf5220b6d1b3650a156044; this results-only documentation
+commit must leave those exact workflow bytes and all other runtime code intact.
+Candidate CI41170358138 passes opa-test and action-ref-smoke. Normal independent
+review and final current-head CI remain required; no review exception transfers.
+No resource/network/identity/state-content change or workload apply occurred.
+
+## 2026-10-30 - Preserve legacy OIDC backend compatibility
+
+The owner approved removing only the redundant `use_cli` backend arguments
+from plan/apply init. Handoff plan41150661556/job124386140487 failed on the
+unchanged Terraform1.9.5/OIDC caller because its backend rejects that argument
+even when false. No plan or apply was produced.
+
+Official HashiCorp backend documentation and versioned1.9.5/1.17.1 source
+confirm current backends accept `ARM_USE_CLI`;1.9.5 has no `use_cli` schema key.
+Both jobs already set `ARM_USE_CLI` and `ARM_USE_OIDC`, so preserve those values,
+the opt-in default, all three login paths, versions, identities, roles, state
+keys, saved-plan and safety gates. The existing contract now rejects the
+unsupported argument in both init jobs while retaining authentication checks.
+
+Leverage scan: no matches. Infra: reuse existing bbuf-runners; defer Corpus,
+synthesizer and indexer changes. Canonical runner inventory documents private
+state reachability; do not infer a network blocker or introduce a PNA fallback.
+Local validation, normal CI/independent review and real plan-only qualification
+of legacy OIDC and current direct identity remain required before deployment.
+
+Local validation passes all3workflow contracts and15subtests, including the
+actual login scripts' success/failure/authority checks and rejection of the
+unsupported argument in both init jobs. Ruff and patch hygiene pass.
+Raw actionlint on both this change and immutable basea217eb1 reports only the
+same pre-existing SC2086 plan-script warning; excluding that exact diagnostic
+leaves actionlint clean. No workflow checks or safety policies were disabled.
+
 ## 2026-10-30 - Approved Direction And First Qualification
 
 The owner rejected unnecessary repository/application isolation for this

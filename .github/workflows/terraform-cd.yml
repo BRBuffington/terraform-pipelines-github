@@ -206,8 +206,7 @@ jobs:
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ steps.bkey.outputs.key }}" \
             -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}" \
-            -backend-config="use_cli=${{ inputs.use_managed_identity }}"
+            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}"
 
       # NOTE: No `terraform workspace` step. The backend `key` already gives
       # each config its own state file (`<prefix>/<config>.tfstate`), so
@@ -364,8 +363,7 @@ jobs:
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
             -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}" \
-            -backend-config="use_cli=${{ inputs.use_managed_identity }}"
+            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}"
 
       # No `terraform workspace` step — see comment in plan job.
 

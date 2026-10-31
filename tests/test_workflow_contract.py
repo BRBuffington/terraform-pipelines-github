@@ -55,7 +55,7 @@ class TerraformCdWorkflowContractTests(unittest.TestCase):
                     self.assertIn('ARM_USE_OIDC: ${{ !inputs.use_managed_identity }}', job)
                     self.assertIn('ARM_USE_CLI: ${{ inputs.use_managed_identity }}', job)
                     self.assertIn('-backend-config="use_oidc=${{ !inputs.use_managed_identity }}"', job)
-                    self.assertIn('-backend-config="use_cli=${{ inputs.use_managed_identity }}"', job)
+                    self.assertNotIn('-backend-config="use_cli=', job)
                 else:
                     self.assertIn('if: ${{ !inputs.use_managed_identity }}', job)
 
