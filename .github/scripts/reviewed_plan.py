@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,8 +69,8 @@ def context():
     return result
 
 
-def paths(configuration):
-    root = Path(os.environ["WORKING_DIR"])
+def paths(configuration, root=None):
+    root = root or Path(os.environ["WORKING_DIR"])
     base = root / (configuration + ".tfplan")
     return root, base, Path(str(base) + ".json"), Path(str(base) + ".lock.hcl"), Path(str(base) + ".receipt.json")
 
@@ -138,7 +139,14 @@ def metadata():
 
 def validate():
     run_id, artifact_id, plan_hash, snapshot, run = metadata()
-    root, plan, rendered, lock, receipt = paths(snapshot["configuration"])
+    root = Path(os.environ["WORKING_DIR"])
+    bundle = Path(os.environ["REVIEWED_PLAN_DIRECTORY"])
+    workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+    require(not bundle.is_symlink() and not bundle.resolve().is_relative_to(workspace), "Plan bundle must be outside the checkout")
+    _, plan, rendered, lock, receipt = paths(snapshot["configuration"], bundle)
+    expected = (plan, rendered, lock, receipt)
+    require(set(bundle.iterdir()) == set(expected), "Unexpected plan bundle contents")
+    require(all(path.is_file() and not path.is_symlink() for path in expected), "Plan bundle must contain only regular files")
     saved = read_object(receipt)
     require(type(saved.get("schema")) is int and saved["schema"] == 1, "Unsupported plan receipt")
     require(saved.get("context") == snapshot, "Plan context or backend changed")
@@ -146,22 +154,41 @@ def validate():
     require(saved.get("plan_sha256") == plan_hash and digest(plan) == plan_hash, "Reviewed plan bytes changed")
     require(digest(rendered) == saved["json_sha256"], "Reviewed plan JSON changed")
     require(digest(lock) == saved["lock_sha256"], "Provider lockfile changed")
-    destination = root / ".terraform.lock.hcl"
-    if destination.exists():
-        require(digest(destination) == saved["lock_sha256"], "Source provider lockfile conflicts with reviewed plan")
-    else:
-        with destination.open("xb") as output:
-            output.write(lock.read_bytes())
+    destinations = ((root / plan.name, plan, plan_hash), (root / ".terraform.lock.hcl", lock, saved["lock_sha256"]))
+    for destination, source, expected_hash in destinations:
+        require(not destination.is_symlink(), "Plan destination cannot be a symlink")
+        if destination.exists():
+            require(digest(destination) == expected_hash, "Source file conflicts with reviewed plan")
+    for destination, source, expected_hash in destinations:
+        if not destination.exists():
+            with destination.open("xb") as output:
+                output.write(source.read_bytes())
     print(json.dumps({"verified": True, "run_id": run_id, "artifact_id": artifact_id, "plan_sha256": plan_hash}))
+    return snapshot, plan, rendered
+
+
+def verify_rendered():
+    snapshot, plan, reviewed = validate()
+    root = Path(os.environ["WORKING_DIR"])
+    rendered = Path(os.environ["REVIEWED_PLAN_RENDERED_PATH"])
+    with rendered.open("x", encoding="utf-8") as output:
+        subprocess.run(
+            ["terraform", "show", "-json", str((root / plan.name).resolve())],
+            cwd=root, stdout=output, check=True, timeout=90,
+        )
+    actual = json.dumps(read_object(rendered), sort_keys=True, allow_nan=False)
+    approved = json.dumps(read_object(reviewed), sort_keys=True, allow_nan=False)
+    require(actual == approved, "Saved binary does not represent reviewed JSON")
+    print(json.dumps({"rendered_verified": True, "configuration": snapshot["configuration"]}))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("record", "request", "metadata", "validate"))
+    parser.add_argument("command", choices=("record", "request", "metadata", "validate", "verify-rendered"))
     command = parser.parse_args().command
     try:
-        {"record": record, "request": reference, "metadata": metadata, "validate": validate}[command]()
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        {"record": record, "request": reference, "metadata": metadata, "validate": validate, "verify-rendered": verify_rendered}[command]()
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print("Reviewed plan blocked: " + str(error), file=sys.stderr)
         return 1
     return 0

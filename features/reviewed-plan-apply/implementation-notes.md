@@ -82,3 +82,34 @@ subtests, Ruff on the touched Python slice and actionlint's YAML/expression
 checks, patch hygiene and the canonical regression precheck. The fetch-first
 shared feature-order check is clear. New-head CI and fresh council approval
 are not yet claimed.
+
+## 2026-11-08 Artifact Isolation And Binary-Policy Linkage Repair
+
+Published binding repair 010a37277e28d5f00c3d14c1ebcd4c84b6df164a passed exact-head
+hosted CI 42499788310, attempt 1. Fresh Workbench council receipt
+47261503-cd6c-5981-aba0-9fa0b025b903 completed two rounds and held PR 19 (one BLOCK,
+one NIT, one APPROVE). The blocking findings concern checkout overwrite during
+artifact extraction and independent hashes that do not link the binary to the
+reviewed JSON or policy check. Neither workflow merged and no resource changed.
+
+The bounded repair keeps the official download action and uses an isolated
+runner-temp bundle with an exact four-regular-file allowlist. Hash/context checks
+precede exclusive staging; conflicting source lock or plan files are preserved.
+After readonly init, native Terraform show renders the staged saved binary.
+Canonical typed JSON comparison rejects a substituted review document; empty,
+malformed, nonzero and timed-out native rendering fail closed. The existing
+conftest version/policies and typed safety parameters are reused for a new OPA
+check on that binary-derived JSON before apply. There is no Terraform replan,
+new identity/grant, state relocation, provider upgrade or approval mechanism.
+
+Initial focused isolation tests passed 19 tests/58 subtests; the first linkage
+check passed 22 tests/64 subtests. The full suite then passed 28 tests/93 subtests.
+Actionlint caught two invalid job-level runner.temp expressions; the existing
+request step now initializes those paths from RUNNER_TEMP through GITHUB_ENV.
+Actionlint and Ruff passed, and the affected rerun passed 24 tests/66 subtests.
+Shared and pilot-journal patch hygiene passed. Exact-head CI and fresh non-author
+council remain required before landing. Fixtures do not
+prove native caller-token artifact access, current-attempt metadata availability
+or an actual retained-plan/apply execution. The approved downstream order remains
+shared/caller landing, real saved-plan qualification, model addition, existing
+dev runtime configuration/release, then July-October hosted acceptance.

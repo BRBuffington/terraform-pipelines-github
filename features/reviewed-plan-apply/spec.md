@@ -24,6 +24,12 @@ backend topology or production resources to obtain a review pause.
   must still match. Missing/ambiguous reusable workflow metadata fails closed.
 - The plan, JSON and provider lock must match the retained receipt. A conflicting
   source lock is never overwritten; a missing one is restored from reviewed bytes.
+- The artifact is extracted outside the checkout and must contain exactly the
+  four expected regular files. Only verified plan/lock bytes can be staged, and
+  conflicting source files are rejected before any staging.
+- After readonly init, native `terraform show -json` must render the exact saved
+  binary as the reviewed JSON. Malformed, empty, failed or timed-out rendering
+  blocks apply. The existing OPA gate reruns against this binary-derived JSON.
 - Apply uses the saved binary and readonly provider lock selection, not a new plan.
 - A stale state failure requires a new reviewed plan, never an automatic retry
   with different plan bytes. Unconfigured callers retain existing behavior.
@@ -36,6 +42,8 @@ The existing workflow test file exercises real selection scripts and the actual
 validator with exact/invalid references, source/backend/identity/safety/attempt
 changes, absent/malformed metadata and plan/JSON/lock/validator tampering.
 It also rejects changed executed reusable workflow revisions and auth modes.
+Bundle isolation, extra/missing files, exclusive staging, native-show selection,
+typed JSON mismatch and failed rendering/policy execution have negative tests.
 Use actionlint for GitHub expressions, existing Ruff, patch/regression gates,
 hosted CI and non-author PR council. Then validate the opt-in caller with a real
 retained artifact and source-bound manual apply on the approved dev deployment.

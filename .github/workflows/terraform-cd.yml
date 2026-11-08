@@ -424,7 +424,11 @@ jobs:
 
       - name: Validate reviewed-plan request
         if: ${{ inputs.reviewed_plan_run_id != '' }}
-        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" request
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" request
+          printf 'REVIEWED_PLAN_DIRECTORY=%s/reviewed-plan-artifact\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'REVIEWED_PLAN_RENDERED_PATH=%s/reviewed-plan-rendered.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Read reviewed-plan source metadata
         if: ${{ inputs.reviewed_plan_run_id != '' }}
@@ -496,7 +500,10 @@ jobs:
           TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
           RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
           ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
-        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" metadata
+        run: |
+          set -euo pipefail
+          test ! -e "$REVIEWED_PLAN_DIRECTORY"
+          python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" metadata
 
       - name: Download exact reviewed plan
         if: ${{ inputs.reviewed_plan_run_id != '' }}
@@ -506,7 +513,7 @@ jobs:
           run-id: ${{ inputs.reviewed_plan_run_id }}
           github-token: ${{ secrets.reviewed_plan_token }}
           repository: ${{ github.repository }}
-          path: ${{ env.WORKING_DIR }}
+          path: ${{ env.REVIEWED_PLAN_DIRECTORY }}
           merge-multiple: true
 
       - name: Verify reviewed plan bytes and context
@@ -533,6 +540,44 @@ jobs:
             $LOCKFILE_ARG
 
       # No `terraform workspace` step — see comment in plan job.
+
+      - name: Setup conftest for reviewed apply
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFTEST_VERSION=0.56.0
+          curl --fail --silent --show-error --location --max-time 60 \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" conftest
+          sudo mv "$RUNNER_TEMP/conftest" /usr/local/bin/conftest
+          conftest --version
+
+      - name: Verify saved binary represents reviewed JSON
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
+          TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
+          RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
+          ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
+        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" verify-rendered
+
+      - name: OPA state-safety gate for reviewed binary
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        shell: bash
+        env:
+          CONFIG: ${{ matrix.config }}
+          ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+          ALLOW_VERSION_ROLLBACK: ${{ inputs.allow_version_rollback }}
+          DESTROY_MODE: ${{ inputs.destroy }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          printf '{"config":"%s","allow_recreate":%s,"allow_version_rollback":%s,"destroy_mode":%s,"event_name":"%s"}\n' \
+            "$CONFIG" "$ALLOW_RECREATE" "$ALLOW_VERSION_ROLLBACK" "$DESTROY_MODE" "$EVENT_NAME" > "$RUNNER_TEMP/reviewed-plan-opa-params.json"
+          conftest test "$REVIEWED_PLAN_RENDERED_PATH" \
+            --policy "$GITHUB_WORKSPACE/.tfpipelines/policy" \
+            --namespace main --data "$RUNNER_TEMP/reviewed-plan-opa-params.json" --no-color
 
       - name: terraform apply
         id: apply

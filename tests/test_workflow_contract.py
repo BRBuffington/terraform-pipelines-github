@@ -52,8 +52,53 @@ class TerraformCdWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("LOCKFILE_ARG", job_block(source, "plan"))
         self.assertIn("github-token: ${{ secrets.reviewed_plan_token }}", apply)
         self.assertIn("merge-multiple: true", apply)
+        reviewed_download = apply.split("      - name: Download exact reviewed plan\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("path: ${{ env.REVIEWED_PLAN_DIRECTORY }}", reviewed_download)
+        self.assertNotIn("path: ${{ env.WORKING_DIR }}", reviewed_download)
+        self.assertNotIn("runner.temp", apply.split("    steps:\n", 1)[0])
+        self.assertIn("printf 'REVIEWED_PLAN_DIRECTORY=%s/reviewed-plan-artifact\\n'", apply)
+        self.assertIn("printf 'REVIEWED_PLAN_RENDERED_PATH=%s/reviewed-plan-rendered.json\\n'", apply)
+        self.assertLess(apply.index("Validate reviewed-plan request"), apply.index("Download exact reviewed plan"))
+        self.assertLess(apply.index("      - name: terraform init"), apply.index("Verify saved binary represents reviewed JSON"))
+        self.assertLess(apply.index("Verify saved binary represents reviewed JSON"), apply.index("OPA state-safety gate for reviewed binary"))
+        self.assertLess(apply.index("OPA state-safety gate for reviewed binary"), apply.index("      - name: terraform apply"))
+        self.assertIn('conftest test "$REVIEWED_PLAN_RENDERED_PATH"', apply)
+        self.assertIn('--policy "$GITHUB_WORKSPACE/.tfpipelines/policy"', apply)
+        self.assertIn('set -euo pipefail', apply.split("      - name: OPA state-safety gate for reviewed binary\n", 1)[1])
         self.assertNotIn("\n    permissions:\n", apply)
         self.assertIn("inputs.reviewed_plan_run_id == '' || inputs.plan_only", job_block(source, "plan"))
+
+    def test_reviewed_binary_policy_failure_blocks_the_apply_step(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step = job_block(source, "apply").split("      - name: OPA state-safety gate for reviewed binary\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n      - ", 1)[0])
+        candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+        bash = str(candidate) if candidate.is_file() else shutil.which("bash")
+        self.assertIsNotNone(bash)
+        stub = 'conftest() { printf "%s\\n" "$@" > "$COMMAND_RECEIPT"; return "$POLICY_EXIT"; }\n'
+        with tempfile.TemporaryDirectory(prefix="reviewed-policy-") as directory:
+            root = Path(directory)
+            environment = {
+                "CONFIG": "corpus-eus-prd", "ALLOW_RECREATE": "false", "ALLOW_VERSION_ROLLBACK": "false",
+                "DESTROY_MODE": "false", "EVENT_NAME": "workflow_dispatch", "RUNNER_TEMP": root.as_posix(),
+                "GITHUB_WORKSPACE": root.as_posix(), "REVIEWED_PLAN_RENDERED_PATH": root.as_posix() + "/binary-derived.json",
+                "COMMAND_RECEIPT": root.as_posix() + "/command.txt",
+            }
+            for status in (0, 1):
+                with self.subTest(status=status):
+                    result = subprocess.run(
+                        [bash, "-c", stub + script], env=os.environ | environment | {"POLICY_EXIT": str(status)},
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(result.returncode == 0, status == 0, result.stdout + result.stderr)
+                    arguments = (root / "command.txt").read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(arguments[:2], ["test", environment["REVIEWED_PLAN_RENDERED_PATH"]])
+                    self.assertIn(root.as_posix() + "/.tfpipelines/policy", arguments)
+                    parameters = json.loads((root / "reviewed-plan-opa-params.json").read_text(encoding="utf-8"))
+                    self.assertEqual(parameters, {
+                        "config": "corpus-eus-prd", "allow_recreate": False, "allow_version_rollback": False,
+                        "destroy_mode": False, "event_name": "workflow_dispatch",
+                    })
 
     def test_apply_does_not_depend_on_matrix_plan_outputs(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -179,6 +224,9 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix="reviewed-plan-")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
+        self.bundle_directory = tempfile.TemporaryDirectory(prefix="reviewed-plan-bundle-")
+        self.addCleanup(self.bundle_directory.cleanup)
+        self.bundle = Path(self.bundle_directory.name)
         self.source = "a" * 40
         self.plan = self.root / "corpus-eus-prd.tfplan"
         self.plan.write_bytes(b"exact reviewed binary")
@@ -186,6 +234,8 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         (self.root / ".terraform.lock.hcl").write_text("exact provider selection", encoding="utf-8")
         self.environment = {
             "GITHUB_REPOSITORY": "owner/stack", "GITHUB_SHA": self.source,
+            "GITHUB_WORKSPACE": str(self.root), "REVIEWED_PLAN_DIRECTORY": str(self.bundle),
+            "REVIEWED_PLAN_RENDERED_PATH": str(self.bundle.parent / (self.bundle.name + "-rendered.json")),
             "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch",
             "GITHUB_WORKFLOW_REF": "owner/stack/.github/workflows/terraform-cd.yml@refs/heads/main",
             "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
@@ -219,7 +269,11 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         self.environment_patch = patch.dict(os.environ, self.environment)
         self.environment_patch.start()
         self.addCleanup(self.environment_patch.stop)
+        self.addCleanup(Path(self.environment["REVIEWED_PLAN_RENDERED_PATH"]).unlink, missing_ok=True)
         self.validator.record()
+        for path in self.validator.paths("corpus-eus-prd")[1:]:
+            path.rename(self.bundle / path.name)
+        self.plan = self.bundle / self.plan.name
 
     def write_metadata(self) -> None:
         (self.root / "run.json").write_text(json.dumps(self.run), encoding="utf-8")
@@ -296,6 +350,82 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validator.validate()
         self.assertEqual(destination.read_text(encoding="utf-8"), "unrelated provider selection")
+        self.assertFalse((self.root / self.plan.name).exists())
+
+    def test_unexpected_bundle_members_cannot_replace_the_validator(self) -> None:
+        unexpected = self.bundle / ".tfpipelines" / ".github" / "scripts" / "reviewed_plan.py"
+        unexpected.parent.mkdir(parents=True)
+        unexpected.write_text("untrusted replacement", encoding="utf-8")
+        validator_hash = hashlib.sha256(VALIDATOR.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "Unexpected plan bundle contents"):
+            self.validator.validate()
+        self.assertEqual(hashlib.sha256(VALIDATOR.read_bytes()).hexdigest(), validator_hash)
+        self.assertFalse((self.root / self.plan.name).exists())
+
+    def test_bundle_in_checkout_is_rejected(self) -> None:
+        with patch.dict(os.environ, {"REVIEWED_PLAN_DIRECTORY": str(self.root / "bundle")}):
+            with self.assertRaisesRegex(ValueError, "outside the checkout"):
+                self.validator.validate()
+
+    def test_missing_bundle_member_and_conflicting_plan_are_rejected(self) -> None:
+        receipt = Path(str(self.plan) + ".receipt.json")
+        original = receipt.read_bytes()
+        receipt.unlink()
+        with self.assertRaisesRegex(ValueError, "Unexpected plan bundle contents"):
+            self.validator.validate()
+        receipt.write_bytes(original)
+        destination = self.root / self.plan.name
+        destination.write_bytes(b"unrelated saved plan")
+        with self.assertRaisesRegex(ValueError, "Source file conflicts"):
+            self.validator.validate()
+        self.assertEqual(destination.read_bytes(), b"unrelated saved plan")
+
+    def test_native_show_checks_the_exact_staged_binary_without_replanning(self) -> None:
+        def show(command, *, cwd, stdout, check, timeout):
+            self.assertEqual(command, ["terraform", "show", "-json", str((self.root / self.plan.name).resolve())])
+            self.assertEqual(cwd, self.root)
+            self.assertTrue(check)
+            self.assertEqual(timeout, 90)
+            self.assertEqual((self.root / self.plan.name).read_bytes(), self.plan.read_bytes())
+            stdout.write('{\n  "resource_changes": []\n}')
+
+        with patch.object(self.validator.subprocess, "run", side_effect=show) as run:
+            self.validator.verify_rendered()
+        run.assert_called_once()
+
+    def test_binary_render_mismatch_is_rejected_even_with_valid_receipt_hashes(self) -> None:
+        def show(command, *, cwd, stdout, check, timeout):
+            stdout.write('{"resource_changes": [{"change": {"actions": ["delete"]}}]}')
+
+        with patch.object(self.validator.subprocess, "run", side_effect=show):
+            with self.assertRaisesRegex(ValueError, "does not represent reviewed JSON"):
+                self.validator.verify_rendered()
+
+    def test_empty_malformed_or_failed_native_show_blocks_apply(self) -> None:
+        generated = Path(self.environment["REVIEWED_PLAN_RENDERED_PATH"])
+        for content in ("", "null", "[]", "{"):
+            with self.subTest(content=content):
+                generated.unlink(missing_ok=True)
+                with patch.object(self.validator.subprocess, "run", side_effect=lambda *args, stdout, **kwargs: stdout.write(content)):
+                    with self.assertRaises(ValueError):
+                        self.validator.verify_rendered()
+        for error in (subprocess.CalledProcessError(1, ["terraform"]), subprocess.TimeoutExpired(["terraform"], 90)):
+            with self.subTest(error=error):
+                generated.unlink(missing_ok=True)
+                with patch.object(self.validator.subprocess, "run", side_effect=error):
+                    with self.assertRaises(subprocess.SubprocessError):
+                        self.validator.verify_rendered()
+
+    def test_binary_render_boolean_and_number_are_not_interchangeable(self) -> None:
+        reviewed = Path(str(self.plan) + ".json")
+        reviewed.write_text('{"applyable": false}', encoding="utf-8")
+        receipt = Path(str(self.plan) + ".receipt.json")
+        saved = json.loads(receipt.read_text(encoding="utf-8"))
+        saved["json_sha256"] = hashlib.sha256(reviewed.read_bytes()).hexdigest()
+        receipt.write_text(json.dumps(saved), encoding="utf-8")
+        with patch.object(self.validator.subprocess, "run", side_effect=lambda *args, stdout, **kwargs: stdout.write('{"applyable": 0}')):
+            with self.assertRaisesRegex(ValueError, "does not represent reviewed JSON"):
+                self.validator.verify_rendered()
 
     def test_safety_flag_changes_are_rejected(self) -> None:
         for variable in ("DESTROY_MODE", "ALLOW_RECREATE", "ALLOW_VERSION_ROLLBACK"):

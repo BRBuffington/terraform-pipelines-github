@@ -155,7 +155,13 @@ flags, changed executed reusable workflow revision or checked-out workflow and
 validator bytes, and changed plan/JSON/provider-lock bytes. Missing or ambiguous
 reusable-workflow metadata fails closed. It restores only a missing
 provider lockfile, rejects a conflicting one and initializes with readonly lock
-selection. Terraform applies the exact binary file without replanning. A stale
+selection. The artifact is extracted into an isolated runner-temp directory,
+requires exactly four regular files, and cannot replace checkout files. Verified
+binary/lock bytes are staged only when source files are absent or match exactly.
+After init, native `terraform show -json` must reproduce the reviewed JSON from
+the exact binary, and the existing OPA gate reruns on that binary-derived JSON.
+An empty, malformed, failed or timed-out rendering or failed policy check blocks
+apply. Terraform applies the exact binary file without replanning. A stale
 state failure requires a fresh plan and approval, not automatic fallback.
 
 Source metadata is rejected before artifact extraction. The existing environment,
