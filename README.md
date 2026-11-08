@@ -107,6 +107,11 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 | `environment` | required | GitHub Environment (must match a federated cred). |
 | `configs` | required | JSON array string, e.g. `'["dev"]'`. Each maps to `<tfvars_dir>/<config>.tfvars`. |
 | `plan_only` | `true` | When false, every matrix config applies its saved plan; unchanged plans safely no-op. |
+| `require_reviewed_plan` | `false` | Refuse same-run apply without an explicit previously reviewed plan reference. |
+| `retain_plan` | `false` | Retain a policy-checked single-config main plan-only artifact for a separate manual apply. |
+| `reviewed_plan_run_id` | `""` | Exact successful source run. Nonempty skips new planning when apply is requested. |
+| `reviewed_plan_artifact_id` | `""` | Exact immutable `tfplan-<config>` artifact ID from the source run. |
+| `reviewed_plan_sha256` | `""` | SHA256 of the binary tfplan, not the artifact ZIP. |
 | `destroy` | `false` | Adds `-destroy`. |
 | `working_dir` | `.` | |
 | `tfvars_dir` | `environments` | Relative to `working_dir`. |
@@ -119,6 +124,50 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 | `allow_version_rollback` | `false` | Explicit-consent override for container image rollback; honored only on `workflow_dispatch`. |
 | `stamp_last_applied` | `true` | Stamp managed resources after a successful apply. |
 | `use_managed_identity` | `false` | Use an attached subscription deployment identity on a trusted Azure-hosted runner. No per-repository federation is required. |
+
+### Separate Saved-Plan Review And Apply
+
+For a private repository whose GitHub plan does not provide environment required
+reviewers, opt in with `require_reviewed_plan: true`. This does not change an
+unconfigured caller's same-run behavior or the existing state/identity selection.
+The dispatch permission remains the operator boundary; this mechanism does not
+claim independent human approval from an artifact or a successful plan alone.
+
+Pass the caller's native `GITHUB_TOKEN` as the optional `reviewed_plan_token`
+secret for both dispatches, with `actions: read` in the calling job. This reads
+the executed reusable workflow revision and the selected artifact; no new
+stored secret or identity is needed.
+
+1. Run main with `plan_only=true`, `retain_plan=true`, one configuration and the
+  existing OPA gate enabled. The run uploads the binary plan, rendered JSON,
+  selected provider lockfile and receipt as `tfplan-<config>`, retained seven days.
+2. Download that exact artifact and review the complete JSON. Retained plans may
+  contain sensitive state; do not copy their contents into public logs or PRs.
+  Record the successful run ID, immutable artifact ID and receipt's binary
+  `plan_sha256`. Plan logs alone are not the saved artifact.
+3. After explicit review approval, manually dispatch the same main commit with
+  `plan_only=false`, `retain_plan=false` and all three `reviewed_plan_*` values.
+
+The apply rejects incomplete references, untrusted events/workflows/repositories,
+unsuccessful or expired source artifacts, changed source/attempts, mismatched
+configuration/environment/backend/identity/authentication mode/version/safety
+flags, changed executed reusable workflow revision or checked-out workflow and
+validator bytes, changed policy filenames/bytes, and changed plan/JSON/provider-lock
+bytes. Missing or ambiguous reusable-workflow metadata and absent/invalid policies
+fail closed. It restores only a missing
+provider lockfile, rejects a conflicting one and initializes with readonly lock
+selection. The artifact is extracted into an isolated runner-temp directory,
+requires exactly four regular files, and cannot replace checkout files. Verified
+binary/lock bytes are staged only when source files are absent or match exactly.
+After init, native `terraform show -json` must reproduce the reviewed JSON from
+the exact binary, and the existing OPA gate reruns on that binary-derived JSON.
+An empty, malformed, failed or timed-out rendering or failed policy check blocks
+apply. Terraform applies the exact binary file without replanning. A stale
+state failure requires a fresh plan and approval, not automatic fallback.
+
+Source metadata is rejected before artifact extraction. The existing environment,
+backend key, connection/authentication choice and post-apply tag behavior remain
+unchanged. No Terraform workspace or new deployment service is introduced.
 
 ### Trusted subscription deployment identity
 

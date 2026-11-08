@@ -9,6 +9,10 @@ name: terraform-cd (reusable)
 
 on:
   workflow_call:
+    secrets:
+      reviewed_plan_token:
+        description: "Caller-provided native GITHUB_TOKEN with actions:read for the opt-in reviewed-plan path."
+        required: false
     inputs:
       environment:
         type: string
@@ -20,6 +24,24 @@ on:
       plan_only:
         type: boolean
         default: true
+      require_reviewed_plan:
+        description: "Require a separate exact reviewed-plan reference for apply. Existing callers remain unchanged."
+        type: boolean
+        default: false
+      retain_plan:
+        description: "Retain a single-config main-branch plan-only artifact and its source/backend receipt for review."
+        type: boolean
+        default: false
+      reviewed_plan_run_id:
+        type: string
+        default: ""
+      reviewed_plan_artifact_id:
+        type: string
+        default: ""
+      reviewed_plan_sha256:
+        description: "SHA256 of the reviewed binary tfplan, not the archive."
+        type: string
+        default: ""
       destroy:
         type: boolean
         default: false
@@ -74,6 +96,7 @@ permissions:
 jobs:
   plan:
     name: plan-${{ matrix.config }}
+    if: ${{ inputs.reviewed_plan_run_id == '' || inputs.plan_only }}
     runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}
     strategy:
@@ -97,6 +120,32 @@ jobs:
       AZURE_CORE_USE_MSAL_MANAGED_IDENTITY: "true"
     steps:
       - uses: actions/checkout@v6.0.3
+
+      - name: Validate plan selection
+        env:
+          REQUIRE_REVIEWED_PLAN: ${{ inputs.require_reviewed_plan }}
+          RETAIN_PLAN: ${{ inputs.retain_plan }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+          RUN_OPA: ${{ inputs.run_opa }}
+          DESTROY_MODE: ${{ inputs.destroy }}
+          REVIEWED_PLAN_RUN_ID: ${{ inputs.reviewed_plan_run_id }}
+          REVIEWED_PLAN_ARTIFACT_ID: ${{ inputs.reviewed_plan_artifact_id }}
+          REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}
+        run: |
+          set -euo pipefail
+          test -z "$REVIEWED_PLAN_RUN_ID"
+          test -z "$REVIEWED_PLAN_ARTIFACT_ID"
+          test -z "$REVIEWED_PLAN_SHA256"
+          if [[ "$REQUIRE_REVIEWED_PLAN" == true && "$PLAN_ONLY" != true ]]; then
+            echo "::error::Apply requires the exact previously reviewed plan reference"
+            exit 1
+          fi
+          if [[ "$RETAIN_PLAN" == true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$PLAN_ONLY" = true
+            test "$RUN_OPA" = true
+            test "$DESTROY_MODE" = false
+          fi
 
       - name: Direct managed identity login
         if: ${{ inputs.use_managed_identity }}
@@ -143,17 +192,52 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform fmt -check -recursive
 
+      - name: Read retained-plan workflow revision
+        id: pipeline_revision
+        if: ${{ inputs.retain_plan }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
+          test ! -e "$current_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads((Path(os.environ["RUNNER_TEMP"]) / "reviewed-plan-current-run.json").read_text(encoding="utf-8"))
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["GITHUB_WORKFLOW_REF"].split("@", 1)[0]
+          if (not isinstance(run, dict) or type(run.get("id")) is not int
+              or str(run["id"]) != os.environ["GITHUB_RUN_ID"]
+              or type(run.get("run_attempt")) is not int
+              or str(run["run_attempt"]) != os.environ["GITHUB_RUN_ATTEMPT"]
+              or run.get("repository", {}).get("full_name") != repository
+              or run.get("head_sha") != os.environ["GITHUB_SHA"]
+              or workflow != repository + "/" + str(run.get("path", ""))):
+              raise ValueError("Wrong current run context")
+          references = run.get("referenced_workflows")
+          if not isinstance(references, list):
+              raise ValueError("Reusable workflow metadata is missing")
+          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
+          if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
+              raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("sha=" + matches[0]["sha"] + "\n")
+          PY
+
       # ----- OPA policy gate setup (conftest + this repo's policy/ dir) -----
-      # Checkout this pipelines repo to get the policy/ dir. A reusable workflow
-      # CANNOT introspect its own repo/ref at runtime: github.workflow_ref /
-      # github.workflow_sha and the job.* context all resolve to the CALLER's
-      # entry workflow, not this reusable one (and there is no job.workflow_*
-      # context — that was the bug that 0-job-failed every caller). So derive the
-      # repo from the caller's org (github.repository_owner, which equals the
-      # owner that also hosts this reusable for our fleet and for same-org forks)
-      # and pin the ref to main. Repo is public, so no token is needed. Both
-      # values are controlled (org login + literal), so there is no injection
-      # surface in the with: block.
+      # Retained plans use the independently resolved executed revision.
+      # Unconfigured callers keep the existing public same-org main checkout.
       - name: Setup conftest
         if: ${{ inputs.run_opa }}
         shell: bash
@@ -170,9 +254,18 @@ jobs:
         uses: actions/checkout@v6.0.3
         with:
           repository: ${{ github.repository_owner }}/terraform-pipelines-github
-          ref: main
+          ref: ${{ steps.pipeline_revision.outputs.sha || 'main' }}
           path: .tfpipelines
           persist-credentials: false
+
+      - name: Verify retained-plan checkout revision
+        if: ${{ inputs.retain_plan }}
+        env:
+          PIPELINE_SHA: ${{ steps.pipeline_revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PIPELINE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/.tfpipelines" rev-parse HEAD)" = "$PIPELINE_SHA"
 
       - name: Compute backend key
         id: bkey
@@ -274,14 +367,34 @@ jobs:
             --namespace main \
             --data /tmp/opa-params.json --no-color
 
+      - name: Record retained plan receipt
+        if: ${{ inputs.retain_plan }}
+        env:
+          RUN_OPA: ${{ inputs.run_opa }}
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
+          PLAN_CONFIG: ${{ matrix.config }}
+          PLAN_CONFIGS: ${{ inputs.configs }}
+          PLAN_ENVIRONMENT: ${{ inputs.environment }}
+          TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
+          STATE_RESOURCE_GROUP: ${{ vars.TF_BACKEND_RESOURCE_GROUP }}
+          STATE_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TF_BACKEND_CONTAINER }}
+          STATE_KEY_PREFIX: ${{ vars.TF_BACKEND_KEY_PREFIX }}
+          DESTROY_MODE: ${{ inputs.destroy }}
+          ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+          ALLOW_VERSION_ROLLBACK: ${{ inputs.allow_version_rollback }}
+        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" record
+
       - name: upload plan artifact
-        if: ${{ !inputs.plan_only }}
+        if: ${{ !inputs.plan_only || inputs.retain_plan }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: tfplan-${{ matrix.config }}
           path: |
             ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan
             ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.json
+            ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.lock.hcl
+            ${{ env.WORKING_DIR }}/${{ matrix.config }}.tfplan.receipt.json
           retention-days: 7
 
   apply:
@@ -289,7 +402,7 @@ jobs:
     needs: plan
     # Matrix job outputs are not aggregated by GitHub Actions. Run each saved
     # plan whenever apply is enabled; unchanged plans complete as safe no-ops.
-    if: ${{ !inputs.plan_only }}
+    if: ${{ always() && !cancelled() && !inputs.plan_only && (needs.plan.result == 'success' || (needs.plan.result == 'skipped' && inputs.reviewed_plan_run_id != '')) }}
     runs-on: ${{ fromJSON(inputs.runs_on) }}
     environment: ${{ inputs.environment }}-apply
     strategy:
@@ -302,6 +415,23 @@ jobs:
         shell: bash
     env:
       WORKING_DIR: ${{ inputs.working_dir }}
+      TFVARS_DIR: ${{ inputs.tfvars_dir }}
+      PLAN_CONFIG: ${{ matrix.config }}
+      PLAN_CONFIGS: ${{ inputs.configs }}
+      PLAN_ENVIRONMENT: ${{ inputs.environment }}
+      PLAN_ONLY: ${{ inputs.plan_only }}
+      RETAIN_PLAN: ${{ inputs.retain_plan }}
+      RUN_OPA: ${{ inputs.run_opa }}
+      REVIEWED_PLAN_RUN_ID: ${{ inputs.reviewed_plan_run_id }}
+      REVIEWED_PLAN_ARTIFACT_ID: ${{ inputs.reviewed_plan_artifact_id }}
+      REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}
+      STATE_RESOURCE_GROUP: ${{ vars.TF_BACKEND_RESOURCE_GROUP }}
+      STATE_STORAGE_ACCOUNT: ${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}
+      STATE_CONTAINER: ${{ vars.TF_BACKEND_CONTAINER }}
+      STATE_KEY_PREFIX: ${{ vars.TF_BACKEND_KEY_PREFIX }}
+      DESTROY_MODE: ${{ inputs.destroy }}
+      ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+      ALLOW_VERSION_ROLLBACK: ${{ inputs.allow_version_rollback }}
       ARM_USE_OIDC: ${{ !inputs.use_managed_identity }}
       ARM_USE_CLI: ${{ inputs.use_managed_identity }}
       ARM_USE_MSI: "false"
@@ -312,6 +442,88 @@ jobs:
       AZURE_CORE_USE_MSAL_MANAGED_IDENTITY: "true"
     steps:
       - uses: actions/checkout@v6.0.3
+
+      - name: Read reviewed-plan workflow revision
+        id: pipeline_revision
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
+          test ! -e "$current_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads((Path(os.environ["RUNNER_TEMP"]) / "reviewed-plan-current-run.json").read_text(encoding="utf-8"))
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["GITHUB_WORKFLOW_REF"].split("@", 1)[0]
+          if (not isinstance(run, dict) or type(run.get("id")) is not int
+              or str(run["id"]) != os.environ["GITHUB_RUN_ID"]
+              or type(run.get("run_attempt")) is not int
+              or str(run["run_attempt"]) != os.environ["GITHUB_RUN_ATTEMPT"]
+              or run.get("repository", {}).get("full_name") != repository
+              or run.get("head_sha") != os.environ["GITHUB_SHA"]
+              or workflow != repository + "/" + str(run.get("path", ""))):
+              raise ValueError("Wrong current run context")
+          references = run.get("referenced_workflows")
+          if not isinstance(references, list):
+              raise ValueError("Reusable workflow metadata is missing")
+          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
+          if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
+              raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("sha=" + matches[0]["sha"] + "\n")
+          PY
+
+      - name: Checkout reviewed-plan validator
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        uses: actions/checkout@v6.0.3
+        with:
+          repository: ${{ github.repository_owner }}/terraform-pipelines-github
+          ref: ${{ steps.pipeline_revision.outputs.sha }}
+          path: .tfpipelines
+          persist-credentials: false
+
+      - name: Validate reviewed-plan request
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          PIPELINE_SHA: ${{ steps.pipeline_revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PIPELINE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/.tfpipelines" rev-parse HEAD)" = "$PIPELINE_SHA"
+          python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" request
+          printf 'REVIEWED_PLAN_DIRECTORY=%s/reviewed-plan-artifact\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'REVIEWED_PLAN_RENDERED_PATH=%s/reviewed-plan-rendered.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Read reviewed-plan source metadata
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          run_metadata="$RUNNER_TEMP/reviewed-plan-run.json"
+          artifact_metadata="$RUNNER_TEMP/reviewed-plan-artifact.json"
+          test ! -e "$run_metadata"
+          test ! -e "$artifact_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_PLAN_RUN_ID" > "$run_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$REVIEWED_PLAN_ARTIFACT_ID" > "$artifact_metadata"
 
       - name: Direct managed identity login
         if: ${{ inputs.use_managed_identity }}
@@ -350,22 +562,96 @@ jobs:
           terraform_wrapper: false
 
       - uses: actions/download-artifact@v8.0.1
+        if: ${{ inputs.reviewed_plan_run_id == '' }}
         with:
           name: tfplan-${{ matrix.config }}
           path: ${{ env.WORKING_DIR }}
 
+      - name: Reject untrusted reviewed-plan artifact
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
+          TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
+          RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
+          ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
+        run: |
+          set -euo pipefail
+          test ! -e "$REVIEWED_PLAN_DIRECTORY"
+          python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" metadata
+
+      - name: Download exact reviewed plan
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          artifact-ids: ${{ inputs.reviewed_plan_artifact_id }}
+          run-id: ${{ inputs.reviewed_plan_run_id }}
+          github-token: ${{ secrets.reviewed_plan_token }}
+          repository: ${{ github.repository }}
+          path: ${{ env.REVIEWED_PLAN_DIRECTORY }}
+          merge-multiple: true
+
+      - name: Verify reviewed plan bytes and context
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
+          TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
+          RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
+          ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
+        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" validate
+
       - name: terraform init
         working-directory: ${{ env.WORKING_DIR }}
         run: |
+          LOCKFILE_ARG=""
+          if [[ -n "$REVIEWED_PLAN_RUN_ID" ]]; then LOCKFILE_ARG="-lockfile=readonly"; fi
           terraform init -input=false \
             -backend-config="resource_group_name=${{ vars.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ vars.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/${{ matrix.config }}.tfstate" \
             -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}"
+            -backend-config="use_oidc=${{ !inputs.use_managed_identity }}" \
+            $LOCKFILE_ARG
 
       # No `terraform workspace` step — see comment in plan job.
+
+      - name: Setup conftest for reviewed apply
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFTEST_VERSION=0.56.0
+          curl --fail --silent --show-error --location --max-time 60 \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" conftest
+          sudo mv "$RUNNER_TEMP/conftest" /usr/local/bin/conftest
+          conftest --version
+
+      - name: Verify saved binary represents reviewed JSON
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
+          TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
+          RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
+          ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
+        run: python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" verify-rendered
+
+      - name: OPA state-safety gate for reviewed binary
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        shell: bash
+        env:
+          CONFIG: ${{ matrix.config }}
+          ALLOW_RECREATE: ${{ inputs.allow_recreate }}
+          ALLOW_VERSION_ROLLBACK: ${{ inputs.allow_version_rollback }}
+          DESTROY_MODE: ${{ inputs.destroy }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          printf '{"params":{"config":"%s","allow_recreate":%s,"allow_version_rollback":%s,"destroy_mode":%s,"event_name":"%s"}}\n' \
+            "$CONFIG" "$ALLOW_RECREATE" "$ALLOW_VERSION_ROLLBACK" "$DESTROY_MODE" "$EVENT_NAME" > "$RUNNER_TEMP/reviewed-plan-opa-params.json"
+          conftest test "$REVIEWED_PLAN_RENDERED_PATH" \
+            --policy "$GITHUB_WORKSPACE/.tfpipelines/policy" \
+            --namespace main --data "$RUNNER_TEMP/reviewed-plan-opa-params.json" --no-color
 
       - name: terraform apply
         id: apply
