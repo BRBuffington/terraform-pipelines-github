@@ -331,6 +331,15 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         self.environment_patch.start()
         self.addCleanup(self.environment_patch.stop)
         self.addCleanup(Path(self.environment["REVIEWED_PLAN_RENDERED_PATH"]).unlink, missing_ok=True)
+        original_workflow = self.validator.WORKFLOW_PATH
+        checkout = self.root / ".tfpipelines"
+        copied_workflow = checkout / ".github" / "workflows" / "terraform-cd.yml"
+        copied_workflow.parent.mkdir(parents=True)
+        shutil.copyfile(original_workflow, copied_workflow)
+        shutil.copytree(original_workflow.parents[2] / "policy", checkout / "policy")
+        workflow_patch = patch.object(self.validator, "WORKFLOW_PATH", copied_workflow)
+        workflow_patch.start()
+        self.addCleanup(workflow_patch.stop)
         self.validator.record()
         for path in self.validator.paths("corpus-eus-prd")[1:]:
             path.rename(self.bundle / path.name)
@@ -523,6 +532,31 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         with patch.object(self.validator, "WORKFLOW_PATH", changed):
             with self.assertRaises(ValueError):
                 self.validator.validate()
+
+    def test_policy_content_and_membership_changes_require_a_new_reviewed_plan(self) -> None:
+        policy_root = self.validator.WORKFLOW_PATH.parents[2] / "policy"
+        policy = policy_root / "no_container_image_downgrade.rego"
+        original = policy.read_bytes()
+        added = policy_root / "additional.rego"
+        receipt = json.loads(Path(str(self.plan) + ".receipt.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["context"]["policy_sha256"][policy.name], hashlib.sha256(original).hexdigest())
+        for change in ("content", "missing", "added", "renamed"):
+            with self.subTest(change=change):
+                try:
+                    if change == "content":
+                        policy.write_bytes(original + b"\n")
+                    elif change == "missing":
+                        policy.unlink()
+                    elif change == "added":
+                        added.write_bytes(original)
+                    else:
+                        policy.rename(added)
+                    with self.assertRaisesRegex(ValueError, "Plan context or backend changed"):
+                        self.validator.validate()
+                    self.assertFalse((self.root / self.plan.name).exists())
+                finally:
+                    policy.write_bytes(original)
+                    added.unlink(missing_ok=True)
 
     def test_changed_authentication_mode_requires_a_new_reviewed_plan(self) -> None:
         with patch.dict(os.environ, {"ARM_USE_OIDC": "false", "ARM_USE_CLI": "true"}):

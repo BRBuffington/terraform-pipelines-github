@@ -152,8 +152,9 @@ The apply rejects incomplete references, untrusted events/workflows/repositories
 unsuccessful or expired source artifacts, changed source/attempts, mismatched
 configuration/environment/backend/identity/authentication mode/version/safety
 flags, changed executed reusable workflow revision or checked-out workflow and
-validator bytes, and changed plan/JSON/provider-lock bytes. Missing or ambiguous
-reusable-workflow metadata fails closed. It restores only a missing
+validator bytes, changed policy filenames/bytes, and changed plan/JSON/provider-lock
+bytes. Missing or ambiguous reusable-workflow metadata and absent/invalid policies
+fail closed. It restores only a missing
 provider lockfile, rejects a conflicting one and initializes with readonly lock
 selection. The artifact is extracted into an isolated runner-temp directory,
 requires exactly four regular files, and cannot replace checkout files. Verified

@@ -20,8 +20,9 @@ backend topology or production resources to obtain a review pause.
   application. Source metadata rejection precedes artifact extraction.
 - Source commit, workflow, configuration, environment, state location/key,
   identity, authentication mode, Terraform version, safety flags, executed
-  reusable workflow revision, checked-out workflow bytes and validator bytes
-  must still match. Missing/ambiguous reusable workflow metadata fails closed.
+  reusable workflow revision, checked-out workflow bytes, validator bytes and
+  every policy's relative filename and bytes must still match. Missing/ambiguous
+  reusable workflow metadata or absent/invalid policy files fail closed.
 - The plan, JSON and provider lock must match the retained receipt. A conflicting
   source lock is never overwritten; a missing one is restored from reviewed bytes.
 - The artifact is extracted outside the checkout and must contain exactly the
@@ -42,6 +43,7 @@ The existing workflow test file exercises real selection scripts and the actual
 validator with exact/invalid references, source/backend/identity/safety/attempt
 changes, absent/malformed metadata and plan/JSON/lock/validator tampering.
 It also rejects changed executed reusable workflow revisions and auth modes.
+Policy content changes, additions, removals and renames reject before staging.
 Bundle isolation, extra/missing files, exclusive staging, native-show selection,
 typed JSON mismatch and failed rendering/policy execution have negative tests.
 Use actionlint for GitHub expressions, existing Ruff, patch/regression gates,

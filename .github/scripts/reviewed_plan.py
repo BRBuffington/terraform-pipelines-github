@@ -53,6 +53,11 @@ def context():
     result["backend_key"] = result["backend_prefix"] + "/" + result["configuration"] + ".tfstate"
     result["validator_sha256"] = digest(Path(__file__))
     result["shared_workflow_sha256"] = digest(WORKFLOW_PATH)
+    policy_root = WORKFLOW_PATH.parents[2] / "policy"
+    require(policy_root.is_dir() and not policy_root.is_symlink(), "Policy directory is missing or invalid")
+    policy_files = sorted(policy_root.rglob("*.rego"))
+    require(policy_files and all(path.is_file() and not path.is_symlink() for path in policy_files), "Policy files are missing or invalid")
+    result["policy_sha256"] = {path.relative_to(policy_root).as_posix(): digest(path) for path in policy_files}
     current = read_object(os.environ["CURRENT_RUN_METADATA_PATH"])
     require(type(current.get("id")) is int and str(current["id"]) == os.environ["GITHUB_RUN_ID"], "Wrong current run")
     require(type(current.get("run_attempt")) is int and str(current["run_attempt"]) == os.environ["GITHUB_RUN_ATTEMPT"], "Wrong current attempt")

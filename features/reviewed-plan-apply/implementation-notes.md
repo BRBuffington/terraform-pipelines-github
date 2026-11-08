@@ -143,3 +143,34 @@ Leverage scan: no matches. Infra scan: no matches.
 New-head CI and a fresh non-author council with the actual policy sources remain
 required. Real caller-token artifact access, current-attempt metadata and saved
 plan execution remain separate hosted qualifications; no apply has occurred.
+
+## 2026-11-08 Policy Implementation Binding
+
+Exact-head CI run 42505417805 succeeded on
+3e493fbc570206a60ae8e7c0b917f6f5713e09ef. Hosted logs show 30 tests passed,
+including receipt RUN_OPA propagation and all nine actual-Rego cases without a
+skip. The complete-source council's reconciliation run
+6b67efee-817d-5f1c-9e6a-8532c8838796 finished HOLD: Sonnet NIT, MAI-Code-2-Flash
+BLOCK, Terra APPROVE. The remaining block was missing policy-byte binding.
+
+An isolated reproduction reused the real retained-plan fixture and cloned the
+policy checkout into its temporary directory. Changing only a policy file was
+accepted while workflow bytes and executed-revision metadata stayed unchanged.
+No repository file was modified by that reproduction. Executed workflow
+metadata alone does not prove the bytes fetched from a moving checkout ref.
+
+The existing context now records every recursively discovered Rego policy's
+relative filename and SHA256, rejecting absent/invalid policy files. The existing
+context equality check rejects content changes, additions, removals and renames
+before plan staging. The fixture uses an isolated checkout so these tests never
+edit the actual policy sources. The focused unchanged-policy and mutation tests
+pass (two tests, four subtests). No policy exceptions, new bundle members,
+credentials, infrastructure, dependencies or deployment permissions are added.
+
+Full local workflow qualification passes 30 tests and 97 subtests; actual OPA is
+explicitly skipped locally because it is absent. Ruff and actionlint pass.
+Exact-head hosted CI and a new independent council remain required before
+landing. PR15 remains draft and dependent on PR19.
+Native caller-token/current-attempt/artifact qualification and the approved dev
+apply remain later steps. No merge, model apply or application deploy occurred.
+Leverage scan: no matches. Infra scan: no matches (same approved repair scope).
