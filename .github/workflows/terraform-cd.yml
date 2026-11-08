@@ -341,6 +341,7 @@ jobs:
       - name: Record retained plan receipt
         if: ${{ inputs.retain_plan }}
         env:
+          RUN_OPA: ${{ inputs.run_opa }}
           CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
           PLAN_CONFIG: ${{ matrix.config }}
           PLAN_CONFIGS: ${{ inputs.configs }}
@@ -573,7 +574,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          printf '{"config":"%s","allow_recreate":%s,"allow_version_rollback":%s,"destroy_mode":%s,"event_name":"%s"}\n' \
+          printf '{"params":{"config":"%s","allow_recreate":%s,"allow_version_rollback":%s,"destroy_mode":%s,"event_name":"%s"}}\n' \
             "$CONFIG" "$ALLOW_RECREATE" "$ALLOW_VERSION_ROLLBACK" "$DESTROY_MODE" "$EVENT_NAME" > "$RUNNER_TEMP/reviewed-plan-opa-params.json"
           conftest test "$REVIEWED_PLAN_RENDERED_PATH" \
             --policy "$GITHUB_WORKSPACE/.tfpipelines/policy" \

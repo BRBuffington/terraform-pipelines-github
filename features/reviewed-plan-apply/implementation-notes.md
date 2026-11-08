@@ -113,3 +113,33 @@ prove native caller-token artifact access, current-attempt metadata availability
 or an actual retained-plan/apply execution. The approved downstream order remains
 shared/caller landing, real saved-plan qualification, model addition, existing
 dev runtime configuration/release, then July-October hosted acceptance.
+
+## 2026-11-08 Receipt Environment And Policy-Parameter Repair
+
+Published isolation/linkage head d56d4db3a084492b1e51cd7014edd2ff570c7cbd passed
+hosted CI 42502613426, attempt 1. Workbench receipt
+3537e7db-30e3-5d6b-9e09-607ff5c289a5 held shared PR 19 with three final BLOCKs.
+The receipt step omitted RUN_OPA, which the validator requires; the reviewed
+binary gate also emitted root-level flags instead of the existing data.params
+envelope. The unchanged Rego policies stay strict when params are missing;
+this is broken receipt/override wiring, not an established policy bypass.
+
+Focused regressions reproduced both defects before the two-line workflow repair.
+The receipt test now checks actual workflow propagation and runs record() with
+explicit enabled/disabled policy environments. The existing Bash gate check
+verifies nested typed parameters and propagates nonzero conftest status. A new
+test feeds workflow-generated parameters to the actual unchanged Rego policies
+for nine strict-default, recreation and manual-only rollback cases. No new test
+file, dependency, policy exception, identity, infrastructure or state is added.
+
+Local validation passes 29 tests and 93 subtests, Ruff and actionlint's
+YAML/GitHub-expression checks. OPA is absent locally, so its test explicitly
+skips here and fails closed if OPA is missing in GitHub Actions. Existing hosted
+CI installs OPA 1.4.2 and must execute all nine cases at the new exact head.
+Python editor diagnostics are clear; the existing static workflow warning cannot
+resolve the reviewed bundle path initialized through GITHUB_ENV.
+The refreshed shared feature-order/native worktree inventory is clear.
+Leverage scan: no matches. Infra scan: no matches.
+New-head CI and a fresh non-author council with the actual policy sources remain
+required. Real caller-token artifact access, current-attempt metadata and saved
+plan execution remain separate hosted qualifications; no apply has occurred.

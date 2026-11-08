@@ -95,10 +95,71 @@ class TerraformCdWorkflowContractTests(unittest.TestCase):
                     self.assertEqual(arguments[:2], ["test", environment["REVIEWED_PLAN_RENDERED_PATH"]])
                     self.assertIn(root.as_posix() + "/.tfpipelines/policy", arguments)
                     parameters = json.loads((root / "reviewed-plan-opa-params.json").read_text(encoding="utf-8"))
-                    self.assertEqual(parameters, {
+                    self.assertEqual(parameters, {"params": {
                         "config": "corpus-eus-prd", "allow_recreate": False, "allow_version_rollback": False,
                         "destroy_mode": False, "event_name": "workflow_dispatch",
-                    })
+                    }})
+
+    def test_reviewed_workflow_parameters_drive_actual_rego(self) -> None:
+        opa = shutil.which("opa")
+        if opa is None:
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                self.fail("OPA is required for reviewed-plan policy qualification in CI")
+            self.skipTest("OPA is not installed locally; actual policy qualification runs in CI")
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step = job_block(source, "apply").split("      - name: OPA state-safety gate for reviewed binary\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n      - ", 1)[0])
+        candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+        bash = str(candidate) if candidate.is_file() else shutil.which("bash")
+        self.assertIsNotNone(bash)
+        replacement = {"resource_changes": [{
+            "address": "azurerm_resource_group.example", "type": "azurerm_resource_group",
+            "change": {"actions": ["delete", "create"]},
+        }]}
+        rollback = {"resource_changes": [{
+            "address": "azurerm_container_app.example", "type": "azurerm_container_app",
+            "change": {
+                "actions": ["update"],
+                "before": {"template": [{"container": [{"name": "app", "image": "registry/app:0.29"}]}]},
+                "after": {"template": [{"container": [{"name": "app", "image": "registry/app:0.27"}]}]},
+            },
+        }]}
+        cases = (
+            ("no_changes", {"resource_changes": []}, {}, False),
+            ("replacement_strict", replacement, {}, True),
+            ("replacement_approved", replacement, {"ALLOW_RECREATE": "true"}, False),
+            ("replacement_string_not_approval", replacement, {"ALLOW_RECREATE": '"true"'}, True),
+            ("rollback_strict", rollback, {}, True),
+            ("recreation_does_not_authorize_rollback", rollback, {"ALLOW_RECREATE": "true"}, True),
+            ("rollback_manual_approval", rollback, {"ALLOW_VERSION_ROLLBACK": "true"}, False),
+            ("rollback_push_cannot_override", rollback, {"ALLOW_VERSION_ROLLBACK": "true", "EVENT_NAME": "push"}, True),
+            ("rollback_string_not_approval", rollback, {"ALLOW_VERSION_ROLLBACK": '"true"'}, True),
+        )
+        with tempfile.TemporaryDirectory(prefix="reviewed-policy-rego-") as directory:
+            root = Path(directory)
+            environment = {
+                "CONFIG": "corpus-eus-prd", "ALLOW_RECREATE": "false", "ALLOW_VERSION_ROLLBACK": "false",
+                "DESTROY_MODE": "false", "EVENT_NAME": "workflow_dispatch", "RUNNER_TEMP": root.as_posix(),
+                "GITHUB_WORKSPACE": REPO_ROOT.as_posix(), "REVIEWED_PLAN_RENDERED_PATH": root.as_posix() + "/binary-derived.json",
+            }
+            for name, plan, overrides, denied in cases:
+                with self.subTest(case=name):
+                    emitted = subprocess.run(
+                        [bash, "-c", "conftest() { return 0; }\n" + script], env=os.environ | environment | overrides,
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(emitted.returncode, 0, emitted.stdout + emitted.stderr)
+                    evaluated = subprocess.run(
+                        [opa, "eval", "--format=json", "--fail", "--stdin-input",
+                         "--data", str(REPO_ROOT / "policy" / "no_unexpected_destroy.rego"),
+                         "--data", str(REPO_ROOT / "policy" / "no_container_image_downgrade.rego"),
+                         "--data", str(root / "reviewed-plan-opa-params.json"), "data.main.deny"],
+                        input=json.dumps(plan), capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(evaluated.returncode, 0, evaluated.stdout + evaluated.stderr)
+                    decisions = json.loads(evaluated.stdout)["result"][0]["expressions"][0]["value"]
+                    self.assertIsInstance(decisions, list)
+                    self.assertEqual(bool(decisions), denied, evaluated.stdout)
 
     def test_apply_does_not_depend_on_matrix_plan_outputs(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -279,6 +340,22 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         (self.root / "run.json").write_text(json.dumps(self.run), encoding="utf-8")
         (self.root / "artifact.json").write_text(json.dumps(self.artifact), encoding="utf-8")
         (self.root / "current.json").write_text(json.dumps(self.current_run), encoding="utf-8")
+
+    def test_retained_receipt_receives_workflow_policy_input(self) -> None:
+        step = job_block(WORKFLOW.read_text(encoding="utf-8"), "plan").split(
+            "      - name: Record retained plan receipt\n", 1,
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("          RUN_OPA: ${{ inputs.run_opa }}\n", step)
+        environment = {key: value for key, value in self.environment.items() if key != "RUN_OPA"}
+        for path in (self.plan, Path(str(self.plan) + ".json")):
+            shutil.copyfile(path, self.root / path.name)
+        with patch.dict(os.environ, environment | {"RUN_OPA": "true"}, clear=True):
+            self.validator.record()
+        receipt = self.root / (self.plan.name + ".receipt.json")
+        self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))["plan_sha256"], self.environment["REVIEWED_PLAN_SHA256"])
+        with patch.dict(os.environ, environment | {"RUN_OPA": "false"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "requires the existing policy gate"):
+                self.validator.record()
 
     def test_exact_reviewed_plan_and_provider_lock_are_accepted(self) -> None:
         self.validator.metadata()
