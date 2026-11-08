@@ -1,0 +1,148 @@
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def context():
+    fields = {
+        "repository": "GITHUB_REPOSITORY", "source": "GITHUB_SHA",
+        "configuration": "PLAN_CONFIG", "environment": "PLAN_ENVIRONMENT",
+        "working_dir": "WORKING_DIR", "tfvars_dir": "TFVARS_DIR",
+        "terraform_version": "TERRAFORM_VERSION", "tenant": "ARM_TENANT_ID",
+        "subscription": "ARM_SUBSCRIPTION_ID", "client_id": "ARM_CLIENT_ID",
+        "backend_resource_group": "STATE_RESOURCE_GROUP",
+        "backend_storage_account": "STATE_STORAGE_ACCOUNT",
+        "backend_container": "STATE_CONTAINER", "backend_prefix": "STATE_KEY_PREFIX",
+    }
+    result = {name: os.environ[variable] for name, variable in fields.items()}
+    require(all(result.values()), "Plan context is incomplete")
+    require(re.fullmatch(r"[0-9a-f]{40}", result["source"]), "Invalid source SHA")
+    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", result["configuration"]), "Invalid configuration")
+    require(json.loads(os.environ["PLAN_CONFIGS"]) == [result["configuration"]], "Reviewed plans require one configuration")
+    require(os.environ["GITHUB_REF"] == "refs/heads/main", "Reviewed plans require main")
+    workflow = os.environ["GITHUB_WORKFLOW_REF"].split("@", 1)[0]
+    prefix = result["repository"] + "/"
+    require(workflow.startswith(prefix), "Workflow owner does not match")
+    result["workflow"] = workflow[len(prefix):]
+    result["backend_key"] = result["backend_prefix"] + "/" + result["configuration"] + ".tfstate"
+    result["validator_sha256"] = digest(Path(__file__))
+    for name in ("DESTROY_MODE", "ALLOW_RECREATE", "ALLOW_VERSION_ROLLBACK"):
+        value = os.environ[name]
+        require(value in ("true", "false"), "Invalid plan safety input")
+        result[name.lower()] = value == "true"
+    return result
+
+
+def paths(configuration):
+    root = Path(os.environ["WORKING_DIR"])
+    base = root / (configuration + ".tfplan")
+    return root, base, Path(str(base) + ".json"), Path(str(base) + ".lock.hcl"), Path(str(base) + ".receipt.json")
+
+
+def reference():
+    require(os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch", "Reviewed apply requires manual dispatch")
+    require(os.environ["GITHUB_REF"] == "refs/heads/main", "Reviewed apply requires main")
+    require(os.environ["RUN_OPA"] == "true", "Reviewed apply requires the existing policy gate")
+    require(os.environ["PLAN_ONLY"] == "false", "Reviewed reference is apply-only")
+    require(os.environ["RETAIN_PLAN"] == "false", "Reviewed apply cannot retain a new plan")
+    run_id = os.environ["REVIEWED_PLAN_RUN_ID"]
+    artifact_id = os.environ["REVIEWED_PLAN_ARTIFACT_ID"]
+    plan_hash = os.environ["REVIEWED_PLAN_SHA256"]
+    require(re.fullmatch(r"[1-9][0-9]*", run_id), "Invalid reviewed run ID")
+    require(re.fullmatch(r"[1-9][0-9]*", artifact_id), "Invalid reviewed artifact ID")
+    require(re.fullmatch(r"[0-9a-f]{64}", plan_hash), "Invalid reviewed plan SHA256")
+    return int(run_id), int(artifact_id), plan_hash
+
+
+def read_object(path):
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    require(isinstance(value, dict), "Expected a JSON object")
+    return value
+
+
+def record():
+    snapshot = context()
+    require(os.environ["RUN_OPA"] == "true", "Retained review requires the existing policy gate")
+    require(not snapshot["destroy_mode"], "Retained review requires a non-destroy policy-checked plan")
+    root, plan, rendered, lock, receipt = paths(snapshot["configuration"])
+    lock_bytes = (root / ".terraform.lock.hcl").read_bytes()
+    with lock.open("xb") as output:
+        output.write(lock_bytes)
+    result = {
+        "schema": 1, "context": snapshot, "run_id": os.environ["GITHUB_RUN_ID"],
+        "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+        "plan_sha256": digest(plan), "json_sha256": digest(rendered), "lock_sha256": digest(lock),
+    }
+    with receipt.open("x", encoding="utf-8") as output:
+        output.write(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result))
+
+
+def metadata():
+    run_id, artifact_id, plan_hash = reference()
+    snapshot = context()
+    run = read_object(os.environ["RUN_METADATA_PATH"])
+    artifact = read_object(os.environ["ARTIFACT_METADATA_PATH"])
+    require(type(run.get("id")) is int and run["id"] == run_id, "Wrong source run")
+    require(run.get("status") == "completed" and run.get("conclusion") == "success", "Source run did not succeed")
+    require(run.get("event") in ("push", "workflow_dispatch"), "Untrusted source event")
+    require(run.get("head_branch") == "main" and run.get("head_sha") == snapshot["source"], "Source revision changed")
+    require(run.get("path") == snapshot["workflow"], "Wrong source workflow")
+    repository = run["repository"]
+    require(repository["full_name"] == snapshot["repository"], "Wrong source repository")
+    require(type(artifact.get("id")) is int and artifact["id"] == artifact_id, "Wrong artifact ID")
+    require(artifact.get("expired") is False, "Artifact expired or unreadable")
+    require(artifact.get("name") == "tfplan-" + snapshot["configuration"], "Wrong artifact name")
+    source = artifact["workflow_run"]
+    require(source["id"] == run_id and source["head_sha"] == snapshot["source"] and source["head_branch"] == "main", "Artifact source mismatch")
+    require(source["repository_id"] == repository["id"] and source["head_repository_id"] == repository["id"], "Artifact belongs to another repository")
+    require(type(run.get("run_attempt")) is int and run["run_attempt"] > 0, "Source attempt is missing")
+    return run_id, artifact_id, plan_hash, snapshot, run
+
+
+def validate():
+    run_id, artifact_id, plan_hash, snapshot, run = metadata()
+    root, plan, rendered, lock, receipt = paths(snapshot["configuration"])
+    saved = read_object(receipt)
+    require(type(saved.get("schema")) is int and saved["schema"] == 1, "Unsupported plan receipt")
+    require(saved.get("context") == snapshot, "Plan context or backend changed")
+    require(saved.get("run_id") == str(run_id) and saved.get("run_attempt") == str(run["run_attempt"]), "Plan attempt changed")
+    require(saved.get("plan_sha256") == plan_hash and digest(plan) == plan_hash, "Reviewed plan bytes changed")
+    require(digest(rendered) == saved["json_sha256"], "Reviewed plan JSON changed")
+    require(digest(lock) == saved["lock_sha256"], "Provider lockfile changed")
+    destination = root / ".terraform.lock.hcl"
+    if destination.exists():
+        require(digest(destination) == saved["lock_sha256"], "Source provider lockfile conflicts with reviewed plan")
+    else:
+        with destination.open("xb") as output:
+            output.write(lock.read_bytes())
+    print(json.dumps({"verified": True, "run_id": run_id, "artifact_id": artifact_id, "plan_sha256": plan_hash}))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=("record", "request", "metadata", "validate"))
+    command = parser.parse_args().command
+    try:
+        {"record": record, "request": reference, "metadata": metadata, "validate": validate}[command]()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print("Reviewed plan blocked: " + str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
