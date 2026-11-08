@@ -201,3 +201,31 @@ Fresh exact-head hosted CI and independent council remain required before merge.
 Live native-token/current-attempt metadata, artifact retention and manual apply
 still need the approved caller qualification after shared/caller landing.
 Leverage scan: no matches. Infra scan: no matches (same bounded repair scope).
+
+## 2026-11-08 Caller Token Permission Attenuation
+
+Shared PR19 landed at d83761223a170a9710b4346c697c052bcdd14dce after independent
+council and exact-head CI. Caller PR15 landed at
+31530764b29d39813e159929e51c82ecde6c9d88 after three independent APPROVEs; its
+clean primary checkout was fast-forwarded and HEAD equalled fetched origin/main.
+Caller push run 42512865554, attempt 1, executed the shared merge but failed in
+Read retained-plan workflow revision with HTTP 403 at 2026-11-08T19:02:00Z.
+Its native token was present. Terraform init, planning, retention and apply never
+ran. This failure says nothing about referenced_workflows metadata availability.
+
+The caller already grants actions: read, but the reusable root permission map
+omits it. GitHub documents that called workflows may downgrade, never elevate,
+caller token permissions:
+https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
+The smallest repair removes that root override so plan and apply inherit the
+caller map. This avoids requiring Actions read in every legacy caller and leaves
+the separate stamping job's existing permission map untouched. No stored token,
+Azure identity/grant, runner, backend, provider or production resource changes.
+
+The focused cross-run regression failed before the removal and passed afterward.
+Full local validation passes 32 tests and 116 subtests, with one explicit OPA
+skip because OPA is not installed locally. Ruff and actionlint pass. The existing
+editor warning about REVIEWED_PLAN_DIRECTORY is unchanged. New-head hosted CI,
+independent council and a fresh caller retained-plan run remain required. Native
+token access, in-progress metadata and exact saved-plan apply are not yet proven.
+Leverage scan: no matches. Infra scan: no matches (same approved feature).
