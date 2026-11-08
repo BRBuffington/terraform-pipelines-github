@@ -23,6 +23,11 @@ backend topology or production resources to obtain a review pause.
   reusable workflow revision, checked-out workflow bytes, validator bytes and
   every policy's relative filename and bytes must still match. Missing/ambiguous
   reusable workflow metadata or absent/invalid policy files fail closed.
+- Before loading validator or policy code, workflow-owned bootstrap resolves the
+  current attempt's exact executed reusable revision through the native token.
+  Retention and reviewed apply check out that immutable SHA and verify checkout
+  HEAD before executing repository code. Moving main cannot select a different
+  validator; incomplete or mismatched bootstrap metadata blocks the job.
 - The plan, JSON and provider lock must match the retained receipt. A conflicting
   source lock is never overwritten; a missing one is restored from reviewed bytes.
 - The artifact is extracted outside the checkout and must contain exactly the

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -34,6 +35,114 @@ def job_block(source: str, job_name: str) -> str:
 
 
 class TerraformCdWorkflowContractTests(unittest.TestCase):
+    def test_reviewed_validator_bootstrap_requires_current_executed_revision(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        scripts = []
+        for job_name, step_name, checkout, first_use in (
+            ("plan", "Read retained-plan workflow revision", "Checkout pipeline policies", "OPA - backend key convention"),
+            ("apply", "Read reviewed-plan workflow revision", "Checkout reviewed-plan validator", "Validate reviewed-plan request"),
+        ):
+            job = job_block(source, job_name)
+            self.assertLess(job.index(step_name), job.index(checkout))
+            self.assertLess(job.index(checkout), job.index(first_use))
+            step = job.split(f"      - name: {step_name}\n", 1)[1].split("\n      - ", 1)[0]
+            self.assertIn('actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT', step)
+            scripts.append(textwrap.dedent(step.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]))
+            checkout_step = job.split(f"      - name: {checkout}\n", 1)[1].split("\n      - ", 1)[0]
+            self.assertIn("steps.pipeline_revision.outputs.sha", checkout_step)
+            self.assertNotIn("ref: main", checkout_step)
+        self.assertEqual(scripts[0], scripts[1])
+        revision = "c" * 40
+        reference = {"path": "BRBuffington/terraform-pipelines-github/.github/workflows/terraform-cd.yml@main", "sha": revision}
+        metadata = {
+            "id": 100, "run_attempt": 2, "repository": {"full_name": "BRBuffington/corpus-search"},
+            "head_sha": "a" * 40, "path": ".github/workflows/terraform-cd.yml", "referenced_workflows": [reference],
+        }
+        cases = (
+            ("exact_revision", {}, True),
+            ("missing_references", {"referenced_workflows": None}, False),
+            ("empty_references", {"referenced_workflows": []}, False),
+            ("ambiguous_references", {"referenced_workflows": [reference, reference]}, False),
+            ("wrong_owner", {"referenced_workflows": [reference | {"path": reference["path"].replace("BRBuffington/", "other/")}]}, False),
+            ("invalid_sha", {"referenced_workflows": [reference | {"sha": "main"}]}, False),
+            ("missing_sha", {"referenced_workflows": [{"path": reference["path"]}]}, False),
+            ("wrong_run", {"id": 101}, False),
+            ("string_run", {"id": "100"}, False),
+            ("wrong_attempt", {"run_attempt": 1}, False),
+            ("wrong_repository", {"repository": {"full_name": "other/corpus-search"}}, False),
+            ("wrong_source", {"head_sha": "b" * 40}, False),
+            ("wrong_workflow", {"path": ".github/workflows/other.yml"}, False),
+        )
+        with tempfile.TemporaryDirectory(prefix="reviewed-bootstrap-") as directory:
+            root = Path(directory)
+            output = root / "output.txt"
+            environment = {
+                "RUNNER_TEMP": str(root), "GITHUB_OUTPUT": str(output), "GITHUB_RUN_ID": "100", "GITHUB_RUN_ATTEMPT": "2",
+                "GITHUB_REPOSITORY": "BRBuffington/corpus-search", "GITHUB_SHA": "a" * 40,
+                "GITHUB_WORKFLOW_REF": "BRBuffington/corpus-search/.github/workflows/terraform-cd.yml@refs/heads/main",
+            }
+            for name, changes, accepted in cases:
+                with self.subTest(case=name):
+                    output.unlink(missing_ok=True)
+                    (root / "reviewed-plan-current-run.json").write_text(json.dumps(metadata | changes), encoding="utf-8")
+                    result = subprocess.run(
+                        [sys.executable, "-c", scripts[0]], env=os.environ | environment,
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+                    if accepted:
+                        self.assertEqual(output.read_text(encoding="utf-8"), "sha=" + revision + "\n")
+                    else:
+                        self.assertFalse(output.exists(), "Invalid provenance must never select validator code")
+
+    def test_reviewed_validator_rejects_wrong_checkout_before_execution(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        apply = job_block(source, "apply")
+        step = apply.split("      - name: Validate reviewed-plan request\n", 1)[1].split("\n      - ", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        plan = job_block(source, "plan")
+        self.assertLess(plan.index("Verify retained-plan checkout revision"), plan.index("OPA - backend key convention"))
+        retained_step = plan.split("      - name: Verify retained-plan checkout revision\n", 1)[1].split("\n      - ", 1)[0]
+        retained_script = textwrap.dedent(retained_step.split("        run: |\n", 1)[1])
+        candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+        bash = str(candidate) if candidate.is_file() else shutil.which("bash")
+        self.assertIsNotNone(bash)
+        with tempfile.TemporaryDirectory(prefix="reviewed-checkout-") as directory:
+            root = Path(directory)
+            checkout = root / ".tfpipelines"
+            checkout.mkdir()
+            validator = checkout / ".github" / "scripts" / "reviewed_plan.py"
+            validator.parent.mkdir(parents=True)
+            validator.write_text(
+                "import os\nfrom pathlib import Path\nPath(os.environ['EXECUTION_RECEIPT']).write_text('executed')\n",
+                encoding="utf-8",
+            )
+            for arguments in (
+                ["git", "init", str(checkout)], ["git", "-C", str(checkout), "add", ".github"],
+                ["git", "-C", str(checkout), "-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+                 "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture"],
+            ):
+                subprocess.run(arguments, check=True, capture_output=True, text=True, timeout=15)
+            revision = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, timeout=15,
+            ).stdout.strip()
+            receipt = root / "executed.txt"
+            environment = {
+                "GITHUB_WORKSPACE": root.as_posix(), "RUNNER_TEMP": root.as_posix(),
+                "GITHUB_ENV": (root / "environment.txt").as_posix(), "EXECUTION_RECEIPT": str(receipt),
+                "PYTHON_EXECUTABLE": Path(sys.executable).as_posix(),
+            }
+            for name, command in (("apply", script), ("retention", retained_script + '\npython3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" record\n')):
+                for sha, accepted in ((revision, True), ("d" * 40, False), ("", False)):
+                    with self.subTest(job=name, checkout_sha=sha):
+                        receipt.unlink(missing_ok=True)
+                        result = subprocess.run(
+                            [bash, "-c", 'python3() { "$PYTHON_EXECUTABLE" "$@"; }\n' + command],
+                            env=os.environ | environment | {"PIPELINE_SHA": sha}, capture_output=True, text=True, timeout=15,
+                        )
+                        self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+                        self.assertEqual(receipt.exists(), accepted, "Wrong checkout must block before repository Python executes")
+
     def test_reviewed_plan_uses_explicit_cross_run_reference(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
         apply = job_block(source, "apply")

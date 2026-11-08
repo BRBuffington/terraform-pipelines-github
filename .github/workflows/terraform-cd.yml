@@ -192,17 +192,52 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform fmt -check -recursive
 
+      - name: Read retained-plan workflow revision
+        id: pipeline_revision
+        if: ${{ inputs.retain_plan }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
+          test ! -e "$current_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads((Path(os.environ["RUNNER_TEMP"]) / "reviewed-plan-current-run.json").read_text(encoding="utf-8"))
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["GITHUB_WORKFLOW_REF"].split("@", 1)[0]
+          if (not isinstance(run, dict) or type(run.get("id")) is not int
+              or str(run["id"]) != os.environ["GITHUB_RUN_ID"]
+              or type(run.get("run_attempt")) is not int
+              or str(run["run_attempt"]) != os.environ["GITHUB_RUN_ATTEMPT"]
+              or run.get("repository", {}).get("full_name") != repository
+              or run.get("head_sha") != os.environ["GITHUB_SHA"]
+              or workflow != repository + "/" + str(run.get("path", ""))):
+              raise ValueError("Wrong current run context")
+          references = run.get("referenced_workflows")
+          if not isinstance(references, list):
+              raise ValueError("Reusable workflow metadata is missing")
+          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
+          if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
+              raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("sha=" + matches[0]["sha"] + "\n")
+          PY
+
       # ----- OPA policy gate setup (conftest + this repo's policy/ dir) -----
-      # Checkout this pipelines repo to get the policy/ dir. A reusable workflow
-      # CANNOT introspect its own repo/ref at runtime: github.workflow_ref /
-      # github.workflow_sha and the job.* context all resolve to the CALLER's
-      # entry workflow, not this reusable one (and there is no job.workflow_*
-      # context — that was the bug that 0-job-failed every caller). So derive the
-      # repo from the caller's org (github.repository_owner, which equals the
-      # owner that also hosts this reusable for our fleet and for same-org forks)
-      # and pin the ref to main. Repo is public, so no token is needed. Both
-      # values are controlled (org login + literal), so there is no injection
-      # surface in the with: block.
+      # Retained plans use the independently resolved executed revision.
+      # Unconfigured callers keep the existing public same-org main checkout.
       - name: Setup conftest
         if: ${{ inputs.run_opa }}
         shell: bash
@@ -219,9 +254,18 @@ jobs:
         uses: actions/checkout@v6.0.3
         with:
           repository: ${{ github.repository_owner }}/terraform-pipelines-github
-          ref: main
+          ref: ${{ steps.pipeline_revision.outputs.sha || 'main' }}
           path: .tfpipelines
           persist-credentials: false
+
+      - name: Verify retained-plan checkout revision
+        if: ${{ inputs.retain_plan }}
+        env:
+          PIPELINE_SHA: ${{ steps.pipeline_revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PIPELINE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/.tfpipelines" rev-parse HEAD)" = "$PIPELINE_SHA"
 
       - name: Compute backend key
         id: bkey
@@ -323,21 +367,6 @@ jobs:
             --namespace main \
             --data /tmp/opa-params.json --no-color
 
-      - name: Read retained-plan workflow revision
-        if: ${{ inputs.retain_plan }}
-        env:
-          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
-        run: |
-          set -euo pipefail
-          test -n "$GH_TOKEN"
-          if ! command -v gh >/dev/null 2>&1; then
-            timeout 120s sudo apt-get update
-            timeout 180s sudo apt-get install -y --no-install-recommends gh
-          fi
-          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
-          test ! -e "$current_metadata"
-          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
-
       - name: Record retained plan receipt
         if: ${{ inputs.retain_plan }}
         env:
@@ -414,19 +443,66 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
 
+      - name: Read reviewed-plan workflow revision
+        id: pipeline_revision
+        if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
+          test ! -e "$current_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          run = json.loads((Path(os.environ["RUNNER_TEMP"]) / "reviewed-plan-current-run.json").read_text(encoding="utf-8"))
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["GITHUB_WORKFLOW_REF"].split("@", 1)[0]
+          if (not isinstance(run, dict) or type(run.get("id")) is not int
+              or str(run["id"]) != os.environ["GITHUB_RUN_ID"]
+              or type(run.get("run_attempt")) is not int
+              or str(run["run_attempt"]) != os.environ["GITHUB_RUN_ATTEMPT"]
+              or run.get("repository", {}).get("full_name") != repository
+              or run.get("head_sha") != os.environ["GITHUB_SHA"]
+              or workflow != repository + "/" + str(run.get("path", ""))):
+              raise ValueError("Wrong current run context")
+          references = run.get("referenced_workflows")
+          if not isinstance(references, list):
+              raise ValueError("Reusable workflow metadata is missing")
+          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
+          if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
+              raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("sha=" + matches[0]["sha"] + "\n")
+          PY
+
       - name: Checkout reviewed-plan validator
         if: ${{ inputs.reviewed_plan_run_id != '' }}
         uses: actions/checkout@v6.0.3
         with:
           repository: ${{ github.repository_owner }}/terraform-pipelines-github
-          ref: main
+          ref: ${{ steps.pipeline_revision.outputs.sha }}
           path: .tfpipelines
           persist-credentials: false
 
       - name: Validate reviewed-plan request
         if: ${{ inputs.reviewed_plan_run_id != '' }}
+        env:
+          PIPELINE_SHA: ${{ steps.pipeline_revision.outputs.sha }}
         run: |
           set -euo pipefail
+          test -n "$PIPELINE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/.tfpipelines" rev-parse HEAD)" = "$PIPELINE_SHA"
           python3 "$GITHUB_WORKSPACE/.tfpipelines/.github/scripts/reviewed_plan.py" request
           printf 'REVIEWED_PLAN_DIRECTORY=%s/reviewed-plan-artifact\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'REVIEWED_PLAN_RENDERED_PATH=%s/reviewed-plan-rendered.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -444,13 +520,10 @@ jobs:
           fi
           run_metadata="$RUNNER_TEMP/reviewed-plan-run.json"
           artifact_metadata="$RUNNER_TEMP/reviewed-plan-artifact.json"
-          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
           test ! -e "$run_metadata"
           test ! -e "$artifact_metadata"
-          test ! -e "$current_metadata"
           timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_PLAN_RUN_ID" > "$run_metadata"
           timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$REVIEWED_PLAN_ARTIFACT_ID" > "$artifact_metadata"
-          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
 
       - name: Direct managed identity login
         if: ${{ inputs.use_managed_identity }}

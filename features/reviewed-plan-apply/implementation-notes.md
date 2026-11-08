@@ -174,3 +174,30 @@ landing. PR15 remains draft and dependent on PR19.
 Native caller-token/current-attempt/artifact qualification and the approved dev
 apply remain later steps. No merge, model apply or application deploy occurred.
 Leverage scan: no matches. Infra scan: no matches (same approved repair scope).
+
+## 2026-11-08 Independently Verified Validator Bootstrap
+
+Policy-binding head 517e31212671de2baa8f682f95af6a07900c2a4c passed exact-head
+hosted CI 42507507437, attempt 1, including actual OPA execution. Council receipt
+0def92da-54f2-5894-9795-e175ac5abf54 ended HOLD (Sonnet NIT, MAI APPROVE,
+Terra BLOCK): checking a validator's own hash after executing it from moving
+main does not authenticate that validator. No merge or deployment occurred.
+
+Workflow-owned bootstrap now reads current-attempt GitHub metadata before the
+pipeline checkout. It strictly verifies run, attempt, repository, source and
+caller workflow, then selects exactly one same-org reusable workflow path with
+a lowercase immutable 40-hex SHA. Both retention and reviewed apply check out
+that executed SHA and verify Git HEAD before repository Python or policy code
+executes. The bootstrap never imports a validator from the caller checkout.
+Existing legacy main selection, native token, API/CLI, artifact isolation,
+receipt/policy binding and exact-binary apply remain unchanged.
+
+Immediate executable qualification passes 13 metadata cases. Real Bash and Git
+fixtures prove missing/mismatched checkout SHA prevents validator execution in
+both lanes. Full local qualification passes 32 tests and 116 subtests, with the
+same explicit local OPA skip. Ruff, actionlint and patch hygiene pass; the
+existing editor warning concerns a runner-temp path set through GITHUB_ENV.
+Fresh exact-head hosted CI and independent council remain required before merge.
+Live native-token/current-attempt metadata, artifact retention and manual apply
+still need the approved caller qualification after shared/caller landing.
+Leverage scan: no matches. Infra scan: no matches (same bounded repair scope).
