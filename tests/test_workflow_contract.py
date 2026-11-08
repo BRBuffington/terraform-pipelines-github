@@ -51,6 +51,7 @@ class TerraformCdWorkflowContractTests(unittest.TestCase):
         self.assertIn("-lockfile=readonly", apply)
         self.assertNotIn("LOCKFILE_ARG", job_block(source, "plan"))
         self.assertIn("github-token: ${{ secrets.reviewed_plan_token }}", apply)
+        self.assertIn("merge-multiple: true", apply)
         self.assertNotIn("\n    permissions:\n", apply)
         self.assertIn("inputs.reviewed_plan_run_id == '' || inputs.plan_only", job_block(source, "plan"))
 
@@ -192,6 +193,7 @@ class ReviewedPlanValidationTests(unittest.TestCase):
             "PLAN_ENVIRONMENT": "dev", "WORKING_DIR": str(self.root), "TFVARS_DIR": "configs",
             "TERRAFORM_VERSION": "1.9.5", "ARM_TENANT_ID": "tenant",
             "ARM_SUBSCRIPTION_ID": "subscription", "ARM_CLIENT_ID": "identity",
+            "ARM_USE_OIDC": "true", "ARM_USE_CLI": "false",
             "STATE_RESOURCE_GROUP": "state-rg", "STATE_STORAGE_ACCOUNT": "state-account",
             "STATE_CONTAINER": "tfstate", "STATE_KEY_PREFIX": "stack",
             "DESTROY_MODE": "false", "ALLOW_RECREATE": "false", "ALLOW_VERSION_ROLLBACK": "false",
@@ -200,12 +202,15 @@ class ReviewedPlanValidationTests(unittest.TestCase):
             "REVIEWED_PLAN_SHA256": hashlib.sha256(self.plan.read_bytes()).hexdigest(),
             "RUN_METADATA_PATH": str(self.root / "run.json"),
             "ARTIFACT_METADATA_PATH": str(self.root / "artifact.json"),
+            "CURRENT_RUN_METADATA_PATH": str(self.root / "current.json"),
         }
         self.run = {
             "id": 123, "run_attempt": 1, "status": "completed", "conclusion": "success",
             "event": "workflow_dispatch", "head_branch": "main", "head_sha": self.source,
             "path": ".github/workflows/terraform-cd.yml", "repository": {"full_name": "owner/stack", "id": 77},
+            "referenced_workflows": [{"path": "owner/terraform-pipelines-github/.github/workflows/terraform-cd.yml@main", "sha": "c" * 40}],
         }
+        self.current_run = {**self.run, "referenced_workflows": [dict(self.run["referenced_workflows"][0])]}
         self.artifact = {
             "id": 456, "name": "tfplan-corpus-eus-prd", "expired": False,
             "workflow_run": {"id": 123, "head_sha": self.source, "head_branch": "main", "repository_id": 77, "head_repository_id": 77},
@@ -219,6 +224,7 @@ class ReviewedPlanValidationTests(unittest.TestCase):
     def write_metadata(self) -> None:
         (self.root / "run.json").write_text(json.dumps(self.run), encoding="utf-8")
         (self.root / "artifact.json").write_text(json.dumps(self.artifact), encoding="utf-8")
+        (self.root / "current.json").write_text(json.dumps(self.current_run), encoding="utf-8")
 
     def test_exact_reviewed_plan_and_provider_lock_are_accepted(self) -> None:
         self.validator.metadata()
@@ -303,6 +309,50 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         with patch.object(self.validator, "__file__", str(changed)):
             with self.assertRaises(ValueError):
                 self.validator.validate()
+
+    def test_changed_shared_workflow_requires_a_new_reviewed_plan(self) -> None:
+        changed = self.root / "changed_workflow.yml"
+        changed.write_bytes(self.validator.WORKFLOW_PATH.read_bytes() + b"\n")
+        with patch.object(self.validator, "WORKFLOW_PATH", changed):
+            with self.assertRaises(ValueError):
+                self.validator.validate()
+
+    def test_changed_authentication_mode_requires_a_new_reviewed_plan(self) -> None:
+        with patch.dict(os.environ, {"ARM_USE_OIDC": "false", "ARM_USE_CLI": "true"}):
+            with self.assertRaises(ValueError):
+                self.validator.validate()
+        for authentication in (("true", "true"), ("false", "false")):
+            with self.subTest(authentication=authentication), patch.dict(
+                os.environ, {"ARM_USE_OIDC": authentication[0], "ARM_USE_CLI": authentication[1]},
+            ):
+                with self.assertRaises(ValueError):
+                    self.validator.validate()
+
+    def test_executed_shared_workflow_revision_changes_are_rejected(self) -> None:
+        self.current_run["referenced_workflows"][0]["sha"] = "d" * 40
+        self.write_metadata()
+        with self.assertRaises(ValueError):
+            self.validator.validate()
+
+    def test_unrelated_current_run_metadata_is_rejected(self) -> None:
+        for field, value in (
+            ("id", 124), ("run_attempt", 2),
+            ("repository", {"full_name": "other/stack"}),
+            ("head_sha", "b" * 40), ("path", ".github/workflows/other.yml"),
+        ):
+            with self.subTest(field=field), patch.dict(self.current_run, {field: value}):
+                self.write_metadata()
+                with self.assertRaises(ValueError):
+                    self.validator.metadata()
+
+    def test_missing_or_ambiguous_shared_workflow_metadata_fails_closed(self) -> None:
+        original = self.current_run["referenced_workflows"]
+        for references in (None, [], [{}], original * 2, [{**original[0], "sha": "invalid"}]):
+            with self.subTest(references=references):
+                self.current_run["referenced_workflows"] = references
+                self.write_metadata()
+                with self.assertRaises(ValueError):
+                    self.validator.validate()
 
     def test_record_rejects_unchecked_or_destroy_plan_before_retention(self) -> None:
         lock = Path(str(self.plan) + ".lock.hcl")

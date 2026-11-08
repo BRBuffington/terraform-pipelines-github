@@ -42,3 +42,43 @@ tuples fail positively, and validator changes require a fresh reviewed plan.
 The next gates are task-only staging/regression precheck, exact-head CI and
 non-author council review. The native caller-token cross-run path remains a
 hosted proof limit until the real retained-plan/apply execution is verified.
+
+## 2026-11-08 Council HOLD And Local Binding Repair
+
+Shared PR 19 head e07defc9081c72e42b09ea731c15caf4ae459903 passed hosted CI
+42497174702, but council panel e03dbeec-f03f-5be9-8b03-5703f3316445 and
+reconciliation f87935a1-ebeb-5775-890b-f5e41fb9ee95 ended HOLD (two BLOCK,
+one NIT). Official PR comment 6723823069 independently confirms the verdict.
+No merge or deployment occurred. Caller draft PR 15 head
+0e7e470afbd5182bab85599c8467e5a8885fd705 passed CI 42498094033 and remains
+dependent on shared landing.
+
+The local repair binds the existing OIDC/CLI mode, checked-out shared workflow
+bytes and the exact executed reusable workflow path/SHA from GitHub's current
+run-attempt API. Source and current references must match, and missing/ambiguous
+metadata fails closed. This closes a moving-main gap that checkout hashing alone
+cannot close. Existing native caller token, metadata CLI and permissions are
+reused; no identity/grant, state or infrastructure change is needed.
+
+F1's claimed single-artifact nesting is disproved by the actual v8.0.1 source:
+https://raw.githubusercontent.com/actions/download-artifact/v8.0.1/src/download-artifact.ts
+Its download path selects resolvedPath when artifacts.length === 1. Explicit
+merge-multiple is retained to make the intended layout unambiguous, with the
+existing single numeric artifact-ID validation unchanged. The initial YAML
+indentation defect was repaired. GitHub-aware actionlint now passes with
+ShellCheck disabled; full ShellCheck reports the unchanged plan command SC2086.
+
+Official contract and live caller CI response both expose referenced_workflows
+with path/sha/ref. The supported run-attempt endpoint preserves attempt identity:
+https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run-attempt
+Local validator tests pass the auth-mode, checked-out workflow-byte, executed
+revision and current-run provenance checks. New-head CI and a fresh non-author
+council remain required before landing. Native token access
+and metadata availability during a real retained-plan run remain hosted proof
+limits, not claims made from the completed validate-only caller CI.
+
+The completed repair validation passes 20 workflow contract tests and 85
+subtests, Ruff on the touched Python slice and actionlint's YAML/expression
+checks, patch hygiene and the canonical regression precheck. The fetch-first
+shared feature-order check is clear. New-head CI and fresh council approval
+are not yet claimed.

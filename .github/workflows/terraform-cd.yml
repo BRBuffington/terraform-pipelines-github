@@ -323,9 +323,25 @@ jobs:
             --namespace main \
             --data /tmp/opa-params.json --no-color
 
+      - name: Read retained-plan workflow revision
+        if: ${{ inputs.retain_plan }}
+        env:
+          GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if ! command -v gh >/dev/null 2>&1; then
+            timeout 120s sudo apt-get update
+            timeout 180s sudo apt-get install -y --no-install-recommends gh
+          fi
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
+          test ! -e "$current_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
+
       - name: Record retained plan receipt
         if: ${{ inputs.retain_plan }}
         env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
           PLAN_CONFIG: ${{ matrix.config }}
           PLAN_CONFIGS: ${{ inputs.configs }}
           PLAN_ENVIRONMENT: ${{ inputs.environment }}
@@ -423,10 +439,13 @@ jobs:
           fi
           run_metadata="$RUNNER_TEMP/reviewed-plan-run.json"
           artifact_metadata="$RUNNER_TEMP/reviewed-plan-artifact.json"
+          current_metadata="$RUNNER_TEMP/reviewed-plan-current-run.json"
           test ! -e "$run_metadata"
           test ! -e "$artifact_metadata"
+          test ! -e "$current_metadata"
           timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_PLAN_RUN_ID" > "$run_metadata"
           timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$REVIEWED_PLAN_ARTIFACT_ID" > "$artifact_metadata"
+          timeout 45s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" > "$current_metadata"
 
       - name: Direct managed identity login
         if: ${{ inputs.use_managed_identity }}
@@ -473,6 +492,7 @@ jobs:
       - name: Reject untrusted reviewed-plan artifact
         if: ${{ inputs.reviewed_plan_run_id != '' }}
         env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
           TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
           RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
           ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json
@@ -487,10 +507,12 @@ jobs:
           github-token: ${{ secrets.reviewed_plan_token }}
           repository: ${{ github.repository }}
           path: ${{ env.WORKING_DIR }}
+          merge-multiple: true
 
       - name: Verify reviewed plan bytes and context
         if: ${{ inputs.reviewed_plan_run_id != '' }}
         env:
+          CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
           TERRAFORM_VERSION: ${{ steps.tfver.outputs.version }}
           RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-run.json
           ARTIFACT_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-artifact.json

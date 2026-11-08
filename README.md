@@ -133,6 +133,11 @@ unconfigured caller's same-run behavior or the existing state/identity selection
 The dispatch permission remains the operator boundary; this mechanism does not
 claim independent human approval from an artifact or a successful plan alone.
 
+Pass the caller's native `GITHUB_TOKEN` as the optional `reviewed_plan_token`
+secret for both dispatches, with `actions: read` in the calling job. This reads
+the executed reusable workflow revision and the selected artifact; no new
+stored secret or identity is needed.
+
 1. Run main with `plan_only=true`, `retain_plan=true`, one configuration and the
   existing OPA gate enabled. The run uploads the binary plan, rendered JSON,
   selected provider lockfile and receipt as `tfplan-<config>`, retained seven days.
@@ -142,13 +147,13 @@ claim independent human approval from an artifact or a successful plan alone.
   `plan_sha256`. Plan logs alone are not the saved artifact.
 3. After explicit review approval, manually dispatch the same main commit with
   `plan_only=false`, `retain_plan=false` and all three `reviewed_plan_*` values.
-  Pass the caller's native `GITHUB_TOKEN` as the optional `reviewed_plan_token`
-  secret, with `actions: read` in the calling job. No new stored secret is needed.
 
 The apply rejects incomplete references, untrusted events/workflows/repositories,
 unsuccessful or expired source artifacts, changed source/attempts, mismatched
-configuration/environment/backend/identity/version/safety flags, changed validator
-bytes, and changed plan/JSON/provider-lock bytes. It restores only a missing
+configuration/environment/backend/identity/authentication mode/version/safety
+flags, changed executed reusable workflow revision or checked-out workflow and
+validator bytes, and changed plan/JSON/provider-lock bytes. Missing or ambiguous
+reusable-workflow metadata fails closed. It restores only a missing
 provider lockfile, rejects a conflicting one and initializes with readonly lock
 selection. Terraform applies the exact binary file without replanning. A stale
 state failure requires a fresh plan and approval, not automatic fallback.

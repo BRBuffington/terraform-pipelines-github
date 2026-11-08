@@ -19,7 +19,9 @@ backend topology or production resources to obtain a review pause.
 - Unsuccessful, expired, incomplete or mismatched provenance fails closed before
   application. Source metadata rejection precedes artifact extraction.
 - Source commit, workflow, configuration, environment, state location/key,
-  identity, Terraform version, safety flags and validator bytes must still match.
+  identity, authentication mode, Terraform version, safety flags, executed
+  reusable workflow revision, checked-out workflow bytes and validator bytes
+  must still match. Missing/ambiguous reusable workflow metadata fails closed.
 - The plan, JSON and provider lock must match the retained receipt. A conflicting
   source lock is never overwritten; a missing one is restored from reviewed bytes.
 - Apply uses the saved binary and readonly provider lock selection, not a new plan.
@@ -33,6 +35,7 @@ backend topology or production resources to obtain a review pause.
 The existing workflow test file exercises real selection scripts and the actual
 validator with exact/invalid references, source/backend/identity/safety/attempt
 changes, absent/malformed metadata and plan/JSON/lock/validator tampering.
+It also rejects changed executed reusable workflow revisions and auth modes.
 Use actionlint for GitHub expressions, existing Ruff, patch/regression gates,
 hosted CI and non-author PR council. Then validate the opt-in caller with a real
 retained artifact and source-bound manual apply on the approved dev deployment.

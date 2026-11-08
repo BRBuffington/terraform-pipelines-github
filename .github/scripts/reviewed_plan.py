@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 
+WORKFLOW_PATH = Path(__file__).resolve().parents[1] / "workflows" / "terraform-cd.yml"
+
 
 def require(condition, message):
     if not condition:
@@ -14,6 +16,16 @@ def require(condition, message):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def shared_workflow(run, repository):
+    expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+    references = run.get("referenced_workflows")
+    require(isinstance(references, list), "Reusable workflow metadata is missing")
+    matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
+    require(len(matches) == 1, "Reusable workflow reference is missing or ambiguous")
+    require(re.fullmatch(r"[0-9a-f]{40}", matches[0].get("sha", "")), "Invalid reusable workflow revision")
+    return {"path": matches[0]["path"], "sha": matches[0]["sha"]}
 
 
 def context():
@@ -39,6 +51,16 @@ def context():
     result["workflow"] = workflow[len(prefix):]
     result["backend_key"] = result["backend_prefix"] + "/" + result["configuration"] + ".tfstate"
     result["validator_sha256"] = digest(Path(__file__))
+    result["shared_workflow_sha256"] = digest(WORKFLOW_PATH)
+    current = read_object(os.environ["CURRENT_RUN_METADATA_PATH"])
+    require(type(current.get("id")) is int and str(current["id"]) == os.environ["GITHUB_RUN_ID"], "Wrong current run")
+    require(type(current.get("run_attempt")) is int and str(current["run_attempt"]) == os.environ["GITHUB_RUN_ATTEMPT"], "Wrong current attempt")
+    require(current["repository"]["full_name"] == result["repository"] and current["head_sha"] == result["source"], "Wrong current source")
+    require(current["path"] == result["workflow"], "Wrong current workflow")
+    result["shared_workflow"] = shared_workflow(current, result["repository"])
+    authentication = (os.environ["ARM_USE_OIDC"], os.environ["ARM_USE_CLI"])
+    require(authentication in (("true", "false"), ("false", "true")), "Invalid authentication mode")
+    result["authentication_mode"] = "oidc" if authentication[0] == "true" else "managed_identity"
     for name in ("DESTROY_MODE", "ALLOW_RECREATE", "ALLOW_VERSION_ROLLBACK"):
         value = os.environ[name]
         require(value in ("true", "false"), "Invalid plan safety input")
@@ -103,6 +125,7 @@ def metadata():
     require(run.get("path") == snapshot["workflow"], "Wrong source workflow")
     repository = run["repository"]
     require(repository["full_name"] == snapshot["repository"], "Wrong source repository")
+    require(shared_workflow(run, snapshot["repository"]) == snapshot["shared_workflow"], "Reusable workflow revision changed")
     require(type(artifact.get("id")) is int and artifact["id"] == artifact_id, "Wrong artifact ID")
     require(artifact.get("expired") is False, "Artifact expired or unreadable")
     require(artifact.get("name") == "tfplan-" + snapshot["configuration"], "Wrong artifact name")
