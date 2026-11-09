@@ -229,3 +229,34 @@ editor warning about REVIEWED_PLAN_DIRECTORY is unchanged. New-head hosted CI,
 independent council and a fresh caller retained-plan run remain required. Native
 token access, in-progress metadata and exact saved-plan apply are not yet proven.
 Leverage scan: no matches. Infra scan: no matches (same approved feature).
+
+## 2026-11-09 Owner-Accepted Caller Permission Boundary
+
+PR20 head cf49c363e51c896f2e8eef89eb52787822e083e8 passed hosted CI
+42513891700, attempt 1 (opa-test and action-ref-smoke). Workbench receipt
+45883d0c-56da-5176-83ae-59c8de3aa098 completed two rounds and held the PR:
+Terra BLOCK, Sonnet NIT and MAI BLOCK. PR comment 6726073515 independently
+records that result. The blocking finding was that removing the reusable root
+cap permits deployment jobs to inherit broader permissions from other callers.
+That finding is real; it is not an increase in Azure access or evidence that
+the actual corpus-search caller grants repository write access.
+
+After the distinction was explained, the owner stated that an additional
+least-privilege layer is not required in this single-owner environment and
+explicitly accepted and approved proceeding on 2026-11-09. Caller-defined
+GitHub token permissions are the accepted boundary for this feature. A second
+callee permission cap and a legacy/reviewed workflow split are not requirements.
+The actual caller keeps contents: read and grants actions: read for saved-plan
+metadata/artifact access. The separate stamping job remains unchanged.
+
+This accepted requirement changes the review context, not the implementation.
+Preserve the original HOLD and submit this decision with the existing complete
+source context through the independent review and CI/merge gates; do not relabel
+old votes, substitute reviewers for a valid BLOCK or waive unrelated findings.
+No stored credential, Azure identity/grant, infrastructure, runner, backend,
+provider or production change is authorized by this permission decision.
+
+After landing, qualify a fresh native-token/current-attempt retained-plan run,
+independently inspect its exact four-member artifact and permit only the approved
+dev-gpt-6-luna addition before exact saved-plan apply. Existing dev release
+activation and July-October hosted acceptance remain subsequent steps.
