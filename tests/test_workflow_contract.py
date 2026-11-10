@@ -174,6 +174,8 @@ class TerraformCdWorkflowContractTests(unittest.TestCase):
         self.assertIn('conftest test "$REVIEWED_PLAN_RENDERED_PATH"', apply)
         self.assertIn('--policy "$GITHUB_WORKSPACE/.tfpipelines/policy"', apply)
         self.assertIn('set -euo pipefail', apply.split("      - name: OPA state-safety gate for reviewed binary\n", 1)[1])
+        self.assertNotIn("\npermissions:\n", source)
+        self.assertNotIn("\n    permissions:\n", job_block(source, "plan"))
         self.assertNotIn("\n    permissions:\n", apply)
         self.assertIn("inputs.reviewed_plan_run_id == '' || inputs.plan_only", job_block(source, "plan"))
 

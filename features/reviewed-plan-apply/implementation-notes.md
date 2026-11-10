@@ -201,3 +201,62 @@ Fresh exact-head hosted CI and independent council remain required before merge.
 Live native-token/current-attempt metadata, artifact retention and manual apply
 still need the approved caller qualification after shared/caller landing.
 Leverage scan: no matches. Infra scan: no matches (same bounded repair scope).
+
+## 2026-11-08 Caller Token Permission Attenuation
+
+Shared PR19 landed at d83761223a170a9710b4346c697c052bcdd14dce after independent
+council and exact-head CI. Caller PR15 landed at
+31530764b29d39813e159929e51c82ecde6c9d88 after three independent APPROVEs; its
+clean primary checkout was fast-forwarded and HEAD equalled fetched origin/main.
+Caller push run 42512865554, attempt 1, executed the shared merge but failed in
+Read retained-plan workflow revision with HTTP 403 at 2026-11-08T19:02:00Z.
+Its native token was present. Terraform init, planning, retention and apply never
+ran. This failure says nothing about referenced_workflows metadata availability.
+
+The caller already grants actions: read, but the reusable root permission map
+omits it. GitHub documents that called workflows may downgrade, never elevate,
+caller token permissions:
+https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
+The smallest repair removes that root override so plan and apply inherit the
+caller map. This avoids requiring Actions read in every legacy caller and leaves
+the separate stamping job's existing permission map untouched. No stored token,
+Azure identity/grant, runner, backend, provider or production resource changes.
+
+The focused cross-run regression failed before the removal and passed afterward.
+Full local validation passes 32 tests and 116 subtests, with one explicit OPA
+skip because OPA is not installed locally. Ruff and actionlint pass. The existing
+editor warning about REVIEWED_PLAN_DIRECTORY is unchanged. New-head hosted CI,
+independent council and a fresh caller retained-plan run remain required. Native
+token access, in-progress metadata and exact saved-plan apply are not yet proven.
+Leverage scan: no matches. Infra scan: no matches (same approved feature).
+
+## 2026-11-09 Owner-Accepted Caller Permission Boundary
+
+PR20 head cf49c363e51c896f2e8eef89eb52787822e083e8 passed hosted CI
+42513891700, attempt 1 (opa-test and action-ref-smoke). Workbench receipt
+45883d0c-56da-5176-83ae-59c8de3aa098 completed two rounds and held the PR:
+Terra BLOCK, Sonnet NIT and MAI BLOCK. PR comment 6726073515 independently
+records that result. The blocking finding was that removing the reusable root
+cap permits deployment jobs to inherit broader permissions from other callers.
+That finding is real; it is not an increase in Azure access or evidence that
+the actual corpus-search caller grants repository write access.
+
+After the distinction was explained, the owner stated that an additional
+least-privilege layer is not required in this single-owner environment and
+explicitly accepted and approved proceeding on 2026-11-09. Caller-defined
+GitHub token permissions are the accepted boundary for this feature. A second
+callee permission cap and a legacy/reviewed workflow split are not requirements.
+The actual caller keeps contents: read and grants actions: read for saved-plan
+metadata/artifact access. The separate stamping job remains unchanged.
+
+This accepted requirement changes the review context, not the implementation.
+Preserve the original HOLD and submit this decision with the existing complete
+source context through the independent review and CI/merge gates; do not relabel
+old votes, substitute reviewers for a valid BLOCK or waive unrelated findings.
+No stored credential, Azure identity/grant, infrastructure, runner, backend,
+provider or production change is authorized by this permission decision.
+
+After landing, qualify a fresh native-token/current-attempt retained-plan run,
+independently inspect its exact four-member artifact and permit only the approved
+dev-gpt-6-luna addition before exact saved-plan apply. Existing dev release
+activation and July-October hosted acceptance remain subsequent steps.

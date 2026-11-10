@@ -39,8 +39,11 @@ backend topology or production resources to obtain a review pause.
 - Apply uses the saved binary and readonly provider lock selection, not a new plan.
 - A stale state failure requires a new reviewed plan, never an automatic retry
   with different plan bytes. Unconfigured callers retain existing behavior.
-- The native caller token supplies only the opt-in artifact reads. No new stored
-  credential is created; legacy callee permissions remain unchanged.
+- The opting-in caller grants its native token Actions read for metadata and
+  artifact access. Plan and apply inherit the caller's declared permissions
+  without a reusable workflow override that strips Actions read. Legacy callers
+  are not required to grant this additional permission. No new stored credential
+  or permission elevation is introduced.
 
 ## Verification
 
