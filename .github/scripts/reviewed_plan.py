@@ -20,7 +20,11 @@ def digest(path):
 
 
 def shared_workflow(run, repository):
-    expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+    caller_owner = repository.split("/", 1)[0]
+    raw_owner = os.environ.get("PIPELINES_OWNER", "")
+    owner = caller_owner if not raw_owner else raw_owner
+    require(owner in (caller_owner, "BRBuffington"), "Untrusted reusable workflow owner")
+    expected = owner + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
     references = run.get("referenced_workflows")
     require(isinstance(references, list), "Reusable workflow metadata is missing")
     matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]

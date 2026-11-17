@@ -729,6 +729,33 @@ class ReviewedPlanValidationTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.validator.metadata()
 
+    def test_cross_account_brbuffington_pipelines_owner_is_allowlisted_and_others_rejected(self) -> None:
+        run_payload = {
+            "id": 200,
+            "run_attempt": 1,
+            "repository": {"full_name": "buffingtonbr/llm-tools-infra"},
+            "head_sha": "a" * 40,
+            "path": ".github/workflows/terraform-cd.yml",
+            "referenced_workflows": [
+                {
+                    "path": "BRBuffington/terraform-pipelines-github/.github/workflows/terraform-cd.yml@main",
+                    "sha": "e" * 40,
+                }
+            ],
+        }
+        # Without PIPELINES_OWNER, cross-account reference is rejected.
+        with patch.dict(os.environ, {"PIPELINES_OWNER": ""}):
+            with self.assertRaisesRegex(ValueError, "Reusable workflow reference is missing or ambiguous"):
+                self.validator.shared_workflow(run_payload, "buffingtonbr/llm-tools-infra")
+        # With allowlisted PIPELINES_OWNER=BRBuffington, cross-account reference succeeds.
+        with patch.dict(os.environ, {"PIPELINES_OWNER": "BRBuffington"}):
+            resolved = self.validator.shared_workflow(run_payload, "buffingtonbr/llm-tools-infra")
+            self.assertEqual(resolved["sha"], "e" * 40)
+        # Arbitrary PIPELINES_OWNER outside {caller_owner, BRBuffington} fails closed.
+        with patch.dict(os.environ, {"PIPELINES_OWNER": "untrusted-org"}):
+            with self.assertRaisesRegex(ValueError, "Untrusted reusable workflow owner"):
+                self.validator.shared_workflow(run_payload, "buffingtonbr/llm-tools-infra")
+
 
 if __name__ == "__main__":
     unittest.main()
