@@ -124,6 +124,7 @@ For each GitHub Environment (`dev`, `staging`, `prod`, plus `*-apply` twins for 
 | `allow_version_rollback` | `false` | Explicit-consent override for container image rollback; honored only on `workflow_dispatch`. |
 | `stamp_last_applied` | `true` | Stamp managed resources after a successful apply. |
 | `use_managed_identity` | `false` | Use an attached subscription deployment identity on a trusted Azure-hosted runner. No per-repository federation is required. |
+| `pipelines_owner` | `""` | Optional allowlisted owner (`"BRBuffington"`) when calling `BRBuffington/terraform-pipelines-github` from a separate account such as `buffingtonbr/*`. |
 
 ### Separate Saved-Plan Review And Apply
 

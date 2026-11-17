@@ -83,6 +83,10 @@ on:
         description: "Use the trusted Azure-hosted runner's attached subscription identity instead of GitHub OIDC."
         type: boolean
         default: false
+      pipelines_owner:
+        description: "Optional allowlisted owner of terraform-pipelines-github for cross-account callers ('BRBuffington' or empty for same-owner)."
+        type: string
+        default: ""
       runs_on:
         description: 'JSON-encoded runs-on value. String like ''"ubuntu-latest"'' or array like ''["self-hosted","bbuf-aca"]''.'
         type: string
@@ -126,11 +130,16 @@ jobs:
           REVIEWED_PLAN_RUN_ID: ${{ inputs.reviewed_plan_run_id }}
           REVIEWED_PLAN_ARTIFACT_ID: ${{ inputs.reviewed_plan_artifact_id }}
           REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}
+          PIPELINES_OWNER: ${{ inputs.pipelines_owner }}
         run: |
           set -euo pipefail
           test -z "$REVIEWED_PLAN_RUN_ID"
           test -z "$REVIEWED_PLAN_ARTIFACT_ID"
           test -z "$REVIEWED_PLAN_SHA256"
+          if [[ -n "${PIPELINES_OWNER:-}" && "${PIPELINES_OWNER:-}" != "BRBuffington" && "${PIPELINES_OWNER:-}" != "${GITHUB_REPOSITORY_OWNER:-}" ]]; then
+            echo "::error::Unsupported pipelines_owner; only empty (same-owner) or BRBuffington is allowed"
+            exit 1
+          fi
           if [[ "$REQUIRE_REVIEWED_PLAN" == true && "$PLAN_ONLY" != true ]]; then
             echo "::error::Apply requires the exact previously reviewed plan reference"
             exit 1
@@ -192,6 +201,7 @@ jobs:
         if: ${{ inputs.retain_plan }}
         env:
           GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+          PIPELINES_OWNER: ${{ inputs.pipelines_owner }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
@@ -222,7 +232,12 @@ jobs:
           references = run.get("referenced_workflows")
           if not isinstance(references, list):
               raise ValueError("Reusable workflow metadata is missing")
-          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          caller_owner = repository.split("/", 1)[0]
+          raw_owner = os.environ.get("PIPELINES_OWNER", "")
+          owner = caller_owner if not raw_owner else raw_owner
+          if owner not in (caller_owner, "BRBuffington"):
+              raise ValueError("Untrusted reusable workflow owner")
+          expected = owner + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
           matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
           if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
               raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
@@ -248,7 +263,7 @@ jobs:
         if: ${{ inputs.run_opa }}
         uses: actions/checkout@v6.0.3
         with:
-          repository: ${{ github.repository_owner }}/terraform-pipelines-github
+          repository: ${{ inputs.pipelines_owner == 'BRBuffington' && 'BRBuffington' || github.repository_owner }}/terraform-pipelines-github
           ref: ${{ steps.pipeline_revision.outputs.sha || 'main' }}
           path: .tfpipelines
           persist-credentials: false
@@ -366,6 +381,7 @@ jobs:
         if: ${{ inputs.retain_plan }}
         env:
           RUN_OPA: ${{ inputs.run_opa }}
+          PIPELINES_OWNER: ${{ inputs.pipelines_owner }}
           CURRENT_RUN_METADATA_PATH: ${{ runner.temp }}/reviewed-plan-current-run.json
           PLAN_CONFIG: ${{ matrix.config }}
           PLAN_CONFIGS: ${{ inputs.configs }}
@@ -417,6 +433,7 @@ jobs:
       PLAN_ONLY: ${{ inputs.plan_only }}
       RETAIN_PLAN: ${{ inputs.retain_plan }}
       RUN_OPA: ${{ inputs.run_opa }}
+      PIPELINES_OWNER: ${{ inputs.pipelines_owner }}
       REVIEWED_PLAN_RUN_ID: ${{ inputs.reviewed_plan_run_id }}
       REVIEWED_PLAN_ARTIFACT_ID: ${{ inputs.reviewed_plan_artifact_id }}
       REVIEWED_PLAN_SHA256: ${{ inputs.reviewed_plan_sha256 }}
@@ -443,6 +460,7 @@ jobs:
         if: ${{ inputs.reviewed_plan_run_id != '' }}
         env:
           GH_TOKEN: ${{ secrets.reviewed_plan_token }}
+          PIPELINES_OWNER: ${{ inputs.pipelines_owner }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
@@ -473,7 +491,12 @@ jobs:
           references = run.get("referenced_workflows")
           if not isinstance(references, list):
               raise ValueError("Reusable workflow metadata is missing")
-          expected = repository.split("/", 1)[0] + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
+          caller_owner = repository.split("/", 1)[0]
+          raw_owner = os.environ.get("PIPELINES_OWNER", "")
+          owner = caller_owner if not raw_owner else raw_owner
+          if owner not in (caller_owner, "BRBuffington"):
+              raise ValueError("Untrusted reusable workflow owner")
+          expected = owner + "/terraform-pipelines-github/.github/workflows/terraform-cd.yml"
           matches = [item for item in references if isinstance(item, dict) and str(item.get("path", "")).split("@", 1)[0] == expected]
           if len(matches) != 1 or not isinstance(matches[0].get("sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", matches[0]["sha"]):
               raise ValueError("Reusable workflow revision is missing, invalid or ambiguous")
@@ -485,7 +508,7 @@ jobs:
         if: ${{ inputs.reviewed_plan_run_id != '' }}
         uses: actions/checkout@v6.0.3
         with:
-          repository: ${{ github.repository_owner }}/terraform-pipelines-github
+          repository: ${{ inputs.pipelines_owner == 'BRBuffington' && 'BRBuffington' || github.repository_owner }}/terraform-pipelines-github
           ref: ${{ steps.pipeline_revision.outputs.sha }}
           path: .tfpipelines
           persist-credentials: false
